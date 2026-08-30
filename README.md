@@ -37,7 +37,14 @@ https://app.notion.com/p/<DATABASE_ID>?v=...
 ```
 NOTION_API_KEY=secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_STATUS_PROPERTY_NAME=Status
 ```
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NOTION_API_KEY` | ✓ | — | Integration secret from Notion |
+| `NOTION_DATABASE_ID` | ✓ | — | ID from the board URL |
+| `NOTION_STATUS_PROPERTY_NAME` | | `Status` | Property name to group tasks by when running `notion tasks` |
 
 The script reads `.env.notion` from whichever directory you call it from, so each project can have its own file pointing to a different database.
 
@@ -73,7 +80,7 @@ notion <command> [arguments]
 
 | Command | Description |
 |---|---|
-| `notion tasks` | List all tasks grouped by Stage |
+| `notion tasks` | List all tasks grouped by `$NOTION_STATUS_PROPERTY_NAME` (default: `Status`) |
 | `notion tasks <No.>` | Show all properties + comments for a task |
 | `notion tasks --filter <prop> <value>` | Filter tasks by any property |
 | `notion tasks --sort <prop> [asc\|desc]` | Sort task list |

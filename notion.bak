@@ -243,9 +243,7 @@ cmd_tasks_list() {
 
   if [[ -z "$statuses" ]]; then
     yellow "No '${NOTION_STATUS_PROPERTY_NAME}' property found — listing flat:"
-    echo "$result" | jq -r '
-      .results[] |
-      "  No." +
+    echo "$result" | jq -r '.results[] | "  No." +
       (.properties | to_entries[] | select(.value.type=="unique_id") | .value.unique_id.number | tostring) +
       "  " +
       (.properties | to_entries[] | select(.value.type=="title") | .value.title | map(.plain_text) | join("") | if length > 80 then .[0:80] + "..." else . end)'
@@ -563,7 +561,7 @@ cmd_help() {
   echo -e "\033[1mENV\033[0m (.env.notion):"
   echo "  NOTION_API_KEY=secret_xxx"
   echo "  NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  echo "  NOTION_STATUS_PROPERTY_NAME=Status    # Property used for grouping (default: Status)"
+  echo "  NOTION_STATUS_PROPERTY_NAME=Status            # Property to group tasks by (default: Status)"
   echo ""
   echo -e "\033[1mEXAMPLES:\033[0m"
   echo "  ./notion tasks"
