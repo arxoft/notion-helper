@@ -20,11 +20,18 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 ENV_FILE="${PWD}/.env.notion"
 
-if [[ -f "$ENV_FILE" ]]; then
-  while IFS='=' read -r key val; do
-    [[ "$key" =~ ^NOTION_ ]] && export "$key"="$val"
-  done < <(sed 's/\r//g' "$ENV_FILE")
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo -e "\033[31mERROR:\033[0m .env.notion not found in current directory (${PWD})"
+  echo ""
+  echo "Create .env.notion with:"
+  echo "  NOTION_API_KEY=secret_xxxx       # from notion.so/profile/integrations"
+  echo "  NOTION_DATABASE_ID=xxxx          # from board URL: notion.so/.../<THIS_PART>?v=..."
+  exit 1
 fi
+
+while IFS='=' read -r key val; do
+  [[ "$key" =~ ^NOTION_ ]] && export "$key"="$val"
+done < <(sed 's/\r//g' "$ENV_FILE")
 
 NOTION_API_KEY="${NOTION_API_KEY:-}"
 NOTION_DATABASE_ID="${NOTION_DATABASE_ID:-}"
