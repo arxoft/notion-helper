@@ -11,6 +11,7 @@
 #   ./notion update <No.> <property> <value>    Update a task property
 #   ./notion create --title "..." [--prop val]  Create a new task
 #   ./notion open <No.>                         Print the Notion URL for a task
+#   ./notion rules                               Display workspace best practices
 # =============================================================================
 
 set -uo pipefail
@@ -643,6 +644,43 @@ cmd_bootstrap() {
 }
 
 # ---------------------------------------------------------------------------
+# cmd: rules — display workspace best practices
+# ---------------------------------------------------------------------------
+cmd_rules() {
+  local rules_file
+  # Look for RULES.md next to this script
+  rules_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/RULES.md"
+
+  if [[ ! -f "$rules_file" ]]; then
+    die "RULES.md not found at: ${rules_file}"
+  fi
+
+  echo ""
+  bold "══════════════════════════════════════════════════"
+  bold " Notion Workspace Rules"
+  bold "══════════════════════════════════════════════════"
+  echo ""
+
+  # Print the file; highlight ## section headers and | table rows for readability
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^##[[:space:]] ]]; then
+      echo ""
+      bold "${line#\# }"
+    elif [[ "$line" =~ ^\|.*\| ]]; then
+      dim "$line"
+    elif [[ "$line" =~ ^\*\* ]]; then
+      info "$line"
+    else
+      echo "$line"
+    fi
+  done < "$rules_file"
+
+  echo ""
+  dim "Source: ${rules_file}"
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
 # cmd: open <No.>
 # ---------------------------------------------------------------------------
 cmd_open() {
@@ -739,6 +777,7 @@ cmd_help() {
   echo "  create --title \"...\" [--prop val]  Create a new task"
   echo "  open <No.>                         Print the Notion URL for a task"
   echo "  bootstrap                          Provision DB with standard task management properties"
+  echo "  rules                              Display workspace best practices"
   echo "  help                               Show this help"
   echo ""
   echo -e "\033[1mENV\033[0m (.env.notion):"
@@ -769,8 +808,10 @@ COMMAND="${1:-help}"
 shift || true
 
 if [[ "$COMMAND" != "help" && "$COMMAND" != "--help" && "$COMMAND" != "-h" ]]; then
-  # bootstrap --help is allowed without .env.notion
+  # bootstrap --help and rules are allowed without .env.notion
   if [[ "$COMMAND" == "bootstrap" && $# -gt 0 && ( "$1" == "--help" || "$1" == "-h" || "$1" == "help" ) ]]; then
+    true
+  elif [[ "$COMMAND" == "rules" ]]; then
     true
   else
     require_env
@@ -810,6 +851,9 @@ case "$COMMAND" in
     else
       cmd_bootstrap
     fi
+    ;;
+  rules)
+    cmd_rules
     ;;
   help|--help|-h)
     cmd_help
