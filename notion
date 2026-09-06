@@ -3,7 +3,7 @@
 # ./notion — Notion CLI for task management via Notion API
 # =============================================================================
 # Usage:
-#   ./notion tasks                              List all tasks grouped by NOTION_STATUS_PROPERTY_NAME
+#   ./notion tasks                              List all tasks grouped by Status
 #   ./notion tasks <No.>                        Show task details + comments
 #   ./notion tasks --filter <prop> <val>        Filter tasks by property value
 #   ./notion tasks --sort <prop> [asc|desc]     Sort task list
@@ -50,7 +50,7 @@ unset _line _key _val
 
 NOTION_API_KEY="${NOTION_API_KEY:-}"
 NOTION_DATABASE_ID="${NOTION_DATABASE_ID:-}"
-NOTION_STATUS_PROPERTY_NAME="${NOTION_STATUS_PROPERTY_NAME:-Status}"
+NOTION_STATUS_PROPERTY_NAME="Status"
 NOTION_TITLE_PROPERTY_NAME="${NOTION_TITLE_PROPERTY_NAME:-Task name}"
 NOTION_VERSION="2022-06-28"
 BASE_URL="https://api.notion.com/v1"
@@ -745,7 +745,6 @@ cmd_bootstrap_help() {
   echo "  4. .env.notion in the current directory"
   echo "     NOTION_API_KEY=ntn_xxxxxxxxxxxx"
   echo "     NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  echo "     NOTION_STATUS_PROPERTY_NAME=Status"
   echo "     NOTION_TITLE_PROPERTY_NAME=Name"
   echo ""
   echo -e "\033[1mNOTES:\033[0m"
@@ -768,7 +767,7 @@ cmd_help() {
   echo "  ./notion <command> [arguments]"
   echo ""
   echo -e "\033[1mCOMMANDS:\033[0m"
-  echo "  tasks                              List all tasks grouped by \$NOTION_STATUS_PROPERTY_NAME (default: Status)"
+  echo "  tasks                              List all tasks grouped by Status"
   echo "  tasks --filter <prop> <value>      Filter tasks by property value"
   echo "  tasks --sort <prop> [asc|desc]     Sort task list by property"
   echo "  tasks <No.>                        Show task details and comments"
@@ -783,7 +782,6 @@ cmd_help() {
   echo -e "\033[1mENV\033[0m (.env.notion):"
   echo "  NOTION_API_KEY=secret_xxx"
   echo "  NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  echo "  NOTION_STATUS_PROPERTY_NAME=Status    # Property used for grouping (default: Status)"
   echo ""
   echo -e "\033[1mEXAMPLES:\033[0m"
   echo "  ./notion tasks"

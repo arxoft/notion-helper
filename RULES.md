@@ -67,6 +67,26 @@ See also: Figma design #123 and the API contract in openapi.yaml.
 
 ---
 
+## Status Changes
+
+- **Always add a comment before changing the `Status`** of a task.
+- The comment should briefly explain *why* the status is changing.
+- This creates a clear audit trail and keeps collaborators in the loop.
+
+**Good:**
+```
+./notion comment 42 "Implementation done and tested locally. Moving to Review."
+./notion update 42 Status "In Review"
+```
+
+**Bad:**
+```
+./notion update 42 Status "In Review"
+```
+*(No context left for the team about what changed or why.)*
+
+---
+
 ## Summary
 
 | Rule          | Guideline                                                                 |
@@ -75,3 +95,4 @@ See also: Figma design #123 and the API contract in openapi.yaml.
 | Description   | Always fill in Notes/Description — include what, why, acceptance criteria |
 | Relevant docs | Reference any related specs, designs, or docs in the description          |
 | Comments      | Keep short; split long thoughts into multiple comments                    |
+| Status change | Always comment before updating the Status property                        |
