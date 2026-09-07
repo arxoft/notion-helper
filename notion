@@ -548,16 +548,16 @@ cmd_bootstrap() {
     "Status": {
       "status": {
         "options": [
-          {"name": "Triage",       "color": "pink"},
-          {"name": "Backlog",      "color": "gray"},
-          {"name": "Up Next",      "color": "blue"},
-          {"name": "In Progress",  "color": "yellow"},
-          {"name": "In Review",    "color": "orange"},
-          {"name": "In QA",            "color": "purple"},
-          {"name": "Ready to Deploy", "color": "brown"},
-          {"name": "UAT",             "color": "orange"},
-          {"name": "Completed",    "color": "green"},
-          {"name": "Cancelled",    "color": "red"}
+          {"name": "Triage"},
+          {"name": "Backlog"},
+          {"name": "Up Next"},
+          {"name": "In Progress"},
+          {"name": "In Review"},
+          {"name": "In QA"},
+          {"name": "Ready to Deploy"},
+          {"name": "UAT"},
+          {"name": "Completed"},
+          {"name": "Cancelled"}
         ],
         "groups": [
           {
@@ -581,10 +581,10 @@ cmd_bootstrap() {
     "Priority": {
       "select": {
         "options": [
-          {"name": "🔴 Critical", "color": "red"},
-          {"name": "🟠 High",     "color": "orange"},
-          {"name": "🟡 Medium",   "color": "yellow"},
-          {"name": "🟢 Low",      "color": "green"}
+          {"name": "🔴 Critical"},
+          {"name": "🟠 High"},
+          {"name": "🟡 Medium"},
+          {"name": "🟢 Low"}
         ]
       }
     },
@@ -597,11 +597,11 @@ cmd_bootstrap() {
     "Tags": {
       "multi_select": {
         "options": [
-          {"name": "issue persists",   "color": "red"},
-          {"name": "reviewed",         "color": "green"},
-          {"name": "on hold",          "color": "gray"},
-          {"name": "awaiting details", "color": "yellow"},
-          {"name": "cancelled",        "color": "brown"}
+          {"name": "issue persists"},
+          {"name": "reviewed"},
+          {"name": "on hold"},
+          {"name": "awaiting details"},
+          {"name": "cancelled"}
         ]
       }
     },
