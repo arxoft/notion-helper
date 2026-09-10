@@ -370,11 +370,38 @@ cmd_add_comment() {
   local page_id
   page_id=$(resolve_page_id "$no")
 
+  # Build a rich_text array that renders URLs as clickable links.
+  # Strategy: split the text on URLs, emit plain-text segments and link
+  # segments alternately, then combine into a JSON array with jq.
+  local rich_text_json
+  rich_text_json=$(python3 -c "
+import re, json, sys
+
+text = sys.argv[1]
+url_re = re.compile(r'(https?://[^\s]+)')
+parts = url_re.split(text)
+segments = []
+for part in parts:
+    if not part:
+        continue
+    if url_re.match(part):
+        segments.append({
+            'type': 'text',
+            'text': {'content': part, 'link': {'url': part}}
+        })
+    else:
+        segments.append({
+            'type': 'text',
+            'text': {'content': part}
+        })
+print(json.dumps(segments))
+" "$text")
+
   local body
   body=$(jq -n \
     --arg pid "$page_id" \
-    --arg txt "$text" \
-    '{parent: {page_id: $pid}, rich_text: [{type: "text", text: {content: $txt}}]}')
+    --argjson rt "$rich_text_json" \
+    '{parent: {page_id: $pid}, rich_text: $rt}')
 
   local result
   result=$(notion_post "/comments" "$body")
@@ -601,7 +628,9 @@ cmd_bootstrap() {
           {"name": "reviewed"},
           {"name": "on hold"},
           {"name": "awaiting details"},
-          {"name": "cancelled"}
+          {"name": "cancelled"},
+          {"name": "has-migration"},
+          {"name": "has-env-change"}
         ]
       }
     },
@@ -611,10 +640,13 @@ cmd_bootstrap() {
     "URL": {
       "url": {}
     },
-    "Estimate": {
+    "Effort": {
       "number": {
         "format": "number"
       }
+    },
+    "Git Branch": {
+      "rich_text": {}
     }
   }')
 
@@ -716,9 +748,11 @@ cmd_bootstrap_help() {
   echo "  Assignee    people       Team member(s) responsible"
   echo "  Due Date    date         Target completion date"
   echo "  Tags        multi_select issue persists · reviewed · on hold · awaiting details · cancelled"
+  echo "                           has-migration · has-env-change"
   echo "  Notes       rich_text    Free-form notes"
   echo "  URL         url          Reference link"
-  echo "  Estimate    number       Story points or time estimate"
+  echo "  Effort      number       Fibonacci effort points (1 2 3 5 8 13)"
+  echo "  Git Branch  rich_text    Associated git branch name"
   echo ""
   echo -e "\033[1mPRE-REQUISITES:\033[0m"
   echo ""

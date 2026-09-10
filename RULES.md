@@ -87,6 +87,53 @@ See also: Figma design #123 and the API contract in openapi.yaml.
 
 ---
 
+## Effort Points
+
+Every task should have an **Effort** property set using Fibonacci points:
+
+| Points | Meaning |
+|--------|---------|
+| 1      | Trivial — a quick config change, typo fix, or one-liner |
+| 2      | Small — straightforward, well-understood work |
+| 3      | Medium-small — a bit of thought required, low risk |
+| 5      | Medium — meaningful work, some unknowns |
+| 8      | Large — complex or touches multiple areas |
+| 13     | Very large — high uncertainty; consider breaking it down |
+
+- If a task feels like it's between two numbers, **pick the higher one**.
+- Tasks at **13 points are a signal** — they're likely too big and should be split before being picked up.
+- Don't use effort points as a time estimate. They measure complexity and uncertainty, not hours.
+
+**Example:**
+```
+./notion update 42 Effort 5
+```
+
+---
+
+## Tags
+
+Use tags to signal special requirements that affect how a task is picked up and deployed.
+
+- If the task involves **running a migration** (database schema changes, data migrations, seed scripts), add the tag:
+  ```
+  has-migration
+  ```
+- If the task requires **changes to environment variables** (new keys, updated values, removed entries in `.env`), add the tag:
+  ```
+  has-env-change
+  ```
+
+These tags help the team prepare the environment before or during deployment and avoid surprises.
+
+**Example:**
+```
+./notion update 42 Tags "has-migration"
+./notion update 42 Tags "has-env-change"
+```
+
+---
+
 ## Summary
 
 | Rule          | Guideline                                                                 |
@@ -96,3 +143,5 @@ See also: Figma design #123 and the API contract in openapi.yaml.
 | Relevant docs | Reference any related specs, designs, or docs in the description          |
 | Comments      | Keep short; split long thoughts into multiple comments                    |
 | Status change | Always comment before updating the Status property                        |
+| Tags          | Add `has-migration` or `has-env-change` when applicable                   |
+| Effort        | Set Fibonacci points (1–13); 13 = too big, consider splitting             |
