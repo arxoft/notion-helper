@@ -3,15 +3,21 @@
 # ./notion — Notion CLI for task management via Notion API
 # =============================================================================
 # Usage:
-#   ./notion tasks                              List all tasks grouped by Status
-#   ./notion tasks <No.>                        Show task details + comments
-#   ./notion tasks --filter <prop> <val>        Filter tasks by property value
-#   ./notion tasks --sort <prop> [asc|desc]     Sort task list
-#   ./notion comment <No.> "text"               Add a comment to a task
-#   ./notion update <No.> <property> <value>    Update a task property
-#   ./notion create --title "..." [--prop val]  Create a new task
-#   ./notion open <No.>                         Print the Notion URL for a task
-#   ./notion rules                               Display workspace best practices
+#   ./notion [--db <id|alias>] tasks              List all tasks grouped by Status
+#   ./notion [--db <id|alias>] tasks <No.>        Show task details + comments
+#   ./notion [--db <id|alias>] tasks --filter <prop> <val>
+#   ./notion [--db <id|alias>] tasks --sort <prop> [asc|desc]
+#   ./notion [--db <id|alias>] comment <No.> "text"
+#   ./notion [--db <id|alias>] update <No.> <property> <value>
+#   ./notion [--db <id|alias>] create --title "..." [--prop val]
+#   ./notion [--db <id|alias>] open <No.>
+#   ./notion dbs                                  List available DB aliases
+#   ./notion rules                                Display workspace best practices
+#
+# --db overrides NOTION_DATABASE_ID for this invocation only.
+# Aliases are defined in .env.notion as NOTION_DB_<ALIAS>=<uuid>
+# e.g.  NOTION_DB_VENTURES=3da11e67af4180c4...
+#       notion --db ventures tasks
 # =============================================================================
 
 set -uo pipefail
@@ -44,7 +50,13 @@ while IFS= read -r _line || [[ -n "$_line" ]]; do
   # strip surrounding quotes from value
   _val="${_val#\"}" ; _val="${_val%\"}"
   _val="${_val#\'}" ; _val="${_val%\'}"
-  [[ "$_key" =~ ^NOTION_ ]] && export "$_key"="$_val"
+  # Handle NOTION_DATABASE_ID:<ALIAS>=<uuid> — store in associative array, skip export
+  if [[ "$_key" =~ ^NOTION_DATABASE_ID:(.+)$ ]]; then
+    _alias="${BASH_REMATCH[1],,}"   # lowercase alias
+    _NOTION_DB_ALIASES["$_alias"]="$_val"
+  elif [[ "$_key" =~ ^NOTION_ ]]; then
+    export "$_key"="$_val"
+  fi
 done < "$ENV_FILE"
 unset _line _key _val
 
@@ -54,6 +66,46 @@ NOTION_STATUS_PROPERTY_NAME="Status"
 NOTION_TITLE_PROPERTY_NAME="${NOTION_TITLE_PROPERTY_NAME:-Task name}"
 NOTION_VERSION="2022-06-28"
 BASE_URL="https://api.notion.com/v1"
+
+# Populated during env parsing: alias (lowercase) → uuid
+declare -A _NOTION_DB_ALIASES=()
+
+# ---------------------------------------------------------------------------
+# Early arg parsing — consume --db <id|alias> before the command name
+# ---------------------------------------------------------------------------
+_DB_OVERRIDE=""
+_REMAINING_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --db)
+      [[ $# -lt 2 ]] && { echo -e "\033[31mERROR:\033[0m --db requires an argument" >&2; exit 1; }
+      _DB_OVERRIDE="$2"; shift; shift ;;
+    *) _REMAINING_ARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${_REMAINING_ARGS[@]+"${_REMAINING_ARGS[@]}"}"
+unset _REMAINING_ARGS
+
+# Resolve alias → UUID if --db was given
+if [[ -n "$_DB_OVERRIDE" ]]; then
+  # Check if it looks like a raw UUID (hex chars and optional hyphens, 32-36 chars)
+  if [[ "$_DB_OVERRIDE" =~ ^[0-9a-fA-F-]{32,36}$ ]]; then
+    NOTION_DATABASE_ID="$_DB_OVERRIDE"
+  else
+    # Look up alias (case-insensitive — aliases stored lowercase)
+    _alias_lower="${_DB_OVERRIDE,,}"
+    _ALIAS_VAL="${_NOTION_DB_ALIASES[$_alias_lower]:-}"
+    if [[ -z "$_ALIAS_VAL" ]]; then
+      echo -e "\033[31mERROR:\033[0m DB alias '${_DB_OVERRIDE}' not found." >&2
+      echo "  Define it in .env.notion as: NOTION_DATABASE_ID:${_DB_OVERRIDE^^}=<uuid>" >&2
+      echo "  Run 'notion dbs' to see available aliases." >&2
+      exit 1
+    fi
+    NOTION_DATABASE_ID="$_ALIAS_VAL"
+    unset _alias_lower _ALIAS_VAL
+  fi
+fi
+unset _DB_OVERRIDE
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -676,8 +728,37 @@ cmd_bootstrap() {
 }
 
 # ---------------------------------------------------------------------------
-# cmd: rules — display workspace best practices
+# cmd: dbs — list available DB aliases from .env.notion
 # ---------------------------------------------------------------------------
+cmd_dbs() {
+  echo ""
+  bold "Available databases"
+  echo ""
+  # Print the default
+  if [[ -n "$NOTION_DATABASE_ID" ]]; then
+    printf "  \033[1m%-20s\033[0m %s\n" "(default)" "$NOTION_DATABASE_ID"
+  fi
+  # Print aliases
+  for _alias in $(echo "${!_NOTION_DB_ALIASES[@]}" | tr ' ' '\n' | sort); do
+    printf "  \033[1m%-20s\033[0m %s\n" "$_alias" "${_NOTION_DB_ALIASES[$_alias]}"
+  done
+  if [[ ${#_NOTION_DB_ALIASES[@]} -eq 0 && -z "$NOTION_DATABASE_ID" ]]; then
+    yellow "  No databases configured. Add entries to .env.notion:"
+  elif [[ ${#_NOTION_DB_ALIASES[@]} -eq 0 ]]; then
+    dim "  No aliases defined."
+  fi
+  echo ""
+  dim "  Define aliases in .env.notion:"
+  dim "    NOTION_DATABASE_ID=<uuid>            # default"
+  dim "    NOTION_DATABASE_ID:VENTURES=<uuid>   # notion --db ventures"
+  dim "    NOTION_DATABASE_ID:CLIENTS=<uuid>    # notion --db clients"
+  echo ""
+  dim "Usage: notion --db <alias> tasks"
+  dim "       notion --db <uuid>  tasks"
+  echo ""
+}
+
+
 cmd_rules() {
   local rules_file
   # Look for RULES.md next to this script
@@ -798,7 +879,12 @@ cmd_help() {
   echo -e "\033[1mNotion CLI\033[0m — Manage Notion tasks from the terminal"
   echo ""
   echo -e "\033[1mUSAGE:\033[0m"
-  echo "  ./notion <command> [arguments]"
+  echo "  ./notion [--db <id|alias>] <command> [arguments]"
+  echo ""
+  echo -e "\033[1mOPTIONS:\033[0m"
+  echo "  --db <id|alias>                    Override NOTION_DATABASE_ID for this run"
+  echo "                                     Use a raw UUID or a named alias from .env.notion"
+  echo "                                     Aliases: NOTION_DB_<ALIAS>=<uuid> in .env.notion"
   echo ""
   echo -e "\033[1mCOMMANDS:\033[0m"
   echo "  tasks                              List all tasks grouped by Status"
@@ -809,16 +895,21 @@ cmd_help() {
   echo "  update <No.> <property> <value>    Update a task property"
   echo "  create --title \"...\" [--prop val]  Create a new task"
   echo "  open <No.>                         Print the Notion URL for a task"
+  echo "  dbs                                List available DB aliases from .env.notion"
   echo "  bootstrap                          Provision DB with standard task management properties"
   echo "  rules                              Display workspace best practices"
   echo "  help                               Show this help"
   echo ""
   echo -e "\033[1mENV\033[0m (.env.notion):"
   echo "  NOTION_API_KEY=secret_xxx"
-  echo "  NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  echo "  NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx            # default DB"
+  echo "  NOTION_DATABASE_ID:VENTURES=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # alias: ventures"
+  echo "  NOTION_DATABASE_ID:CLIENTS=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # alias: clients"
   echo ""
   echo -e "\033[1mEXAMPLES:\033[0m"
   echo "  ./notion tasks"
+  echo "  ./notion --db ventures tasks"
+  echo "  ./notion --db 3da11e67af4180c4... tasks"
   echo "  ./notion tasks 42"
   echo "  ./notion tasks --filter stage \"In Progress\""
   echo "  ./notion tasks --sort \"No.\" desc"
@@ -827,7 +918,9 @@ cmd_help() {
   echo "  ./notion update 42 priority \"High\""
   echo "  ./notion update 42 \"due date\" 2026-09-15"
   echo "  ./notion create --title \"Fix login bug\" --stage \"To Do\" --priority \"High\""
+  echo "  ./notion --db ventures create --title \"New venture\""
   echo "  ./notion open 42"
+  echo "  ./notion dbs"
   echo ""
 }
 
@@ -840,10 +933,10 @@ COMMAND="${1:-help}"
 shift || true
 
 if [[ "$COMMAND" != "help" && "$COMMAND" != "--help" && "$COMMAND" != "-h" ]]; then
-  # bootstrap --help and rules are allowed without .env.notion
+  # bootstrap --help, rules, and dbs are allowed without .env.notion / a valid DB ID
   if [[ "$COMMAND" == "bootstrap" && $# -gt 0 && ( "$1" == "--help" || "$1" == "-h" || "$1" == "help" ) ]]; then
     true
-  elif [[ "$COMMAND" == "rules" ]]; then
+  elif [[ "$COMMAND" == "rules" || "$COMMAND" == "dbs" ]]; then
     true
   else
     require_env
@@ -886,6 +979,9 @@ case "$COMMAND" in
     ;;
   rules)
     cmd_rules
+    ;;
+  dbs)
+    cmd_dbs
     ;;
   help|--help|-h)
     cmd_help
