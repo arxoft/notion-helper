@@ -224,6 +224,269 @@ print_property() {
 }
 
 # ---------------------------------------------------------------------------
+# Shared helper: resolve comma-separated handles → JSON array of people objects
+# Usage: resolve_emails "waqas@example.com,syed@example.com"
+# Result is written to global _RESOLVED_PEOPLE (JSON array of people objects).
+# Dies on unknown email. Calling code reads $_RESOLVED_PEOPLE directly — no subshell needed.
+# ---------------------------------------------------------------------------
+_RESOLVED_PEOPLE=""
+
+resolve_emails() {
+  local input="$1"
+  local users_json
+  users_json=$(notion_get "/users")
+
+  local err
+  err=$(echo "$users_json" | jq -r '.object // ""')
+  if [[ "$err" == "error" ]]; then
+    die "Failed to fetch users: $(echo "$users_json" | jq -r '.message // "unknown error"')"
+  fi
+
+  # Build a map: lowercase_email → id  (persons only)
+  local user_map
+  user_map=$(echo "$users_json" | jq '[
+    .results[]
+    | select(.type == "person")
+    | {
+        email: (.person.email | ascii_downcase),
+        id:    .id
+      }
+  ]')
+
+  local valid_emails
+  valid_emails=$(echo "$user_map" | jq -r '.[].email' | sort | tr '\n' ' ')
+
+  # Split input on commas, resolve each email
+  local people_array="[]"
+  IFS=',' read -ra raw_inputs <<< "$input"
+  for raw in "${raw_inputs[@]}"; do
+    # trim whitespace
+    local email
+    email="${raw#"${raw%%[![:space:]]*}"}"
+    email="${email%"${email##*[![:space:]]}"}"
+    email="${email,,}"   # lowercase for case-insensitive match
+
+    local uid
+    uid=$(echo "$user_map" | jq -r --arg e "$email" \
+      '.[] | select(.email == $e) | .id' | head -1)
+
+    if [[ -z "$uid" ]]; then
+      die "Unknown email '${email}'. Valid emails: ${valid_emails% }"
+    fi
+
+    people_array=$(echo "$people_array" | jq \
+      --arg id "$uid" \
+      '. + [{"object":"user","id":$id}]')
+  done
+
+  _RESOLVED_PEOPLE="$people_array"
+}
+
+# ---------------------------------------------------------------------------
+# Shared helper: resolve a single email (or UUID) → user_id
+# Used by filter logic. Passes UUIDs through unchanged.
+# ---------------------------------------------------------------------------
+resolve_handle_to_id() {
+  local input="$1"
+  # If it already looks like a UUID, return as-is
+  if [[ "$input" =~ ^[0-9a-fA-F-]{32,36}$ ]]; then
+    echo "$input"
+    return
+  fi
+
+  local users_json
+  users_json=$(notion_get "/users")
+
+  local err
+  err=$(echo "$users_json" | jq -r '.object // ""')
+  if [[ "$err" == "error" ]]; then
+    die "Failed to fetch users: $(echo "$users_json" | jq -r '.message // "unknown error"')"
+  fi
+
+  local email_lower="${input,,}"
+  local uid
+  uid=$(echo "$users_json" | jq -r --arg e "$email_lower" '
+    .results[]
+    | select(.type == "person")
+    | select((.person.email | ascii_downcase) == $e)
+    | .id
+  ' | head -1)
+
+  if [[ -z "$uid" ]]; then
+    local valid
+    valid=$(echo "$users_json" | jq -r \
+      '[.results[] | select(.type=="person") | .person.email | ascii_downcase] | sort | join(", ")')
+    die "Unknown email '${input}'. Valid emails: ${valid}"
+  fi
+
+  echo "$uid"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: people — list all workspace members
+# ---------------------------------------------------------------------------
+cmd_people() {
+  info "Fetching workspace members..."
+  local users_json
+  users_json=$(notion_get "/users")
+
+  local err
+  err=$(echo "$users_json" | jq -r '.object // ""')
+  if [[ "$err" == "error" ]]; then
+    die "Failed to fetch users: $(echo "$users_json" | jq -r '.message // "unknown error"')"
+  fi
+
+  echo ""
+  echo "$users_json" | jq -r '.results[] |
+    [
+      (.name // "" | split(" ") | .[0] | ascii_downcase | .[0:14]),
+      (if .type == "bot"
+        then "[bot]"
+        else (.person.email // "—")
+       end | .[0:36]),
+      .id
+    ] |
+    @tsv' | \
+  while IFS=$'\t' read -r handle email uid; do
+    printf "  \033[1m%-14s\033[0m  \033[2m%-36s\033[0m  %s\n" "$handle" "$email" "$uid"
+  done
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
+# cmd: assign <No.> <handle[,handle,...]> — set assignees (replaces all)
+# ---------------------------------------------------------------------------
+cmd_assign() {
+  local no="$1"
+  local handles_input="$2"
+
+  if [[ -z "$handles_input" ]]; then
+    die "Usage: notion assign <No.> <handle[,handle,...]>"
+  fi
+
+  info "Resolving emails..."
+  resolve_emails "$handles_input"
+  local people_array="$_RESOLVED_PEOPLE"
+
+  info "Fetching task No. ${no}..."
+  local page_id
+  page_id=$(resolve_page_id "$no")
+
+  # Find the people property name on this page (prefer "Assigned To", fall back to first people prop)
+  local page
+  page=$(notion_get "/pages/${page_id}")
+  local prop_name
+  prop_name=$(echo "$page" | jq -r '
+    .properties | to_entries[]
+    | select(.value.type == "people")
+    | .key
+  ' | head -1)
+
+  if [[ -z "$prop_name" ]]; then
+    die "No 'people' property found on task No. ${no}."
+  fi
+
+  local body
+  body=$(jq -n \
+    --arg p "$prop_name" \
+    --argjson arr "$people_array" \
+    '{properties: {($p): {people: $arr}}}')
+
+  notion_patch "/pages/${page_id}" "$body" > /dev/null
+  local display
+  display=$(echo "$people_array" | jq -r '[.[].id] | join(", ")')
+  green "✓ Assigned '${prop_name}' on task No. ${no} → ${handles_input}"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: unassign <No.> <handle[,handle,...]> — remove specific assignees
+# ---------------------------------------------------------------------------
+cmd_unassign() {
+  local no="$1"
+  local handles_input="$2"
+
+  if [[ -z "$handles_input" ]]; then
+    die "Usage: notion unassign <No.> <handle[,handle,...]>"
+  fi
+
+  info "Fetching task No. ${no}..."
+  local page_id
+  page_id=$(resolve_page_id "$no")
+
+  local page
+  page=$(notion_get "/pages/${page_id}")
+
+  local prop_name
+  prop_name=$(echo "$page" | jq -r '
+    .properties | to_entries[]
+    | select(.value.type == "people")
+    | .key
+  ' | head -1)
+
+  if [[ -z "$prop_name" ]]; then
+    die "No 'people' property found on task No. ${no}."
+  fi
+
+  # Fetch users to resolve emails → IDs
+  local users_json
+  users_json=$(notion_get "/users")
+
+  # Build set of IDs to remove
+  local remove_ids="[]"
+  IFS=',' read -ra raw_inputs <<< "$handles_input"
+  for raw in "${raw_inputs[@]}"; do
+    local email
+    email="${raw#"${raw%%[![:space:]]*}"}"
+    email="${email%"${email##*[![:space:]]}"}"
+    email="${email,,}"
+
+    local uid
+    uid=$(echo "$users_json" | jq -r --arg e "$email" '
+      .results[]
+      | select(.type == "person")
+      | select((.person.email | ascii_downcase) == $e)
+      | .id
+    ' | head -1)
+
+    if [[ -z "$uid" ]]; then
+      local valid
+      valid=$(echo "$users_json" | jq -r \
+        '[.results[] | select(.type=="person") | .person.email | ascii_downcase] | sort | join(", ")')
+      die "Unknown email '${email}'. Valid emails: ${valid}"
+    fi
+
+    # Check if this person is currently assigned
+    local currently_assigned
+    currently_assigned=$(echo "$page" | jq -r \
+      --arg p "$prop_name" --arg id "$uid" \
+      '.properties[$p].people[]? | select(.id == $id) | .id')
+
+    if [[ -z "$currently_assigned" ]]; then
+      yellow "Warning: '${handle}' is not currently assigned to task No. ${no}, skipping."
+      continue
+    fi
+
+    remove_ids=$(echo "$remove_ids" | jq --arg id "$uid" '. + [$id]')
+  done
+
+  # Build new assignees array: current minus removed
+  local new_people
+  new_people=$(echo "$page" | jq \
+    --arg p "$prop_name" \
+    --argjson rm "$remove_ids" \
+    '.properties[$p].people | map(select(.id as $id | $rm | index($id) == null)) | map({object:"user",id:.id})')
+
+  local body
+  body=$(jq -n \
+    --arg p "$prop_name" \
+    --argjson arr "$new_people" \
+    '{properties: {($p): {people: $arr}}}')
+
+  notion_patch "/pages/${page_id}" "$body" > /dev/null
+  green "✓ Unassigned [${handles_input}] from task No. ${no}"
+}
+
+# ---------------------------------------------------------------------------
 # cmd: tasks list — grouped by Stage
 # ---------------------------------------------------------------------------
 cmd_tasks_list() {
@@ -248,15 +511,61 @@ cmd_tasks_list() {
   local body="{}"
 
   if [[ -n "$filter_prop" && -n "$filter_val" ]]; then
-    body=$(jq -n \
-      --arg prop "$filter_prop" \
-      --arg val "$filter_val" \
-      '{filter: {or: [
-          {property: $prop, rich_text:    {contains: $val}},
-          {property: $prop, select:       {equals:   $val}},
-          {property: $prop, status:       {equals:   $val}},
-          {property: $prop, multi_select: {contains: $val}}
-        ]}}')
+    # Detect property type from the database schema to pick the right filter shape
+    local schema
+    schema=$(notion_get "/databases/${NOTION_DATABASE_ID}")
+
+    local prop_type_for_filter=""
+    prop_type_for_filter=$(echo "$schema" | jq -r --arg p "$filter_prop" '
+      .properties | to_entries[]
+      | select((.key | ascii_downcase) == ($p | ascii_downcase))
+      | .value.type
+    ' | head -1)
+
+    if [[ "$prop_type_for_filter" == "people" ]]; then
+      # Resolve handle → user ID, then use people filter
+      info "Resolving handle '${filter_val}' for people filter..."
+      local uid
+      uid=$(resolve_handle_to_id "$filter_val")
+      local real_prop_name
+      real_prop_name=$(echo "$schema" | jq -r --arg p "$filter_prop" '
+        .properties | to_entries[]
+        | select((.key | ascii_downcase) == ($p | ascii_downcase))
+        | .key
+      ' | head -1)
+      body=$(jq -n \
+        --arg prop "${real_prop_name:-$filter_prop}" \
+        --arg uid "$uid" \
+        '{filter: {property: $prop, people: {contains: $uid}}}')
+
+    elif [[ "$prop_type_for_filter" == "created_by" ]]; then
+      # Resolve handle → user ID, use created_by filter
+      info "Resolving handle '${filter_val}' for created_by filter..."
+      local uid
+      uid=$(resolve_handle_to_id "$filter_val")
+      local real_prop_name
+      real_prop_name=$(echo "$schema" | jq -r --arg p "$filter_prop" '
+        .properties | to_entries[]
+        | select((.key | ascii_downcase) == ($p | ascii_downcase))
+        | .key
+      ' | head -1)
+      body=$(jq -n \
+        --arg prop "${real_prop_name:-$filter_prop}" \
+        --arg uid "$uid" \
+        '{filter: {property: $prop, created_by: {contains: $uid}}}')
+
+    else
+      # Default: OR across common text/select/status/multi_select types
+      body=$(jq -n \
+        --arg prop "$filter_prop" \
+        --arg val "$filter_val" \
+        '{filter: {or: [
+            {property: $prop, rich_text:    {contains: $val}},
+            {property: $prop, select:       {equals:   $val}},
+            {property: $prop, status:       {equals:   $val}},
+            {property: $prop, multi_select: {contains: $val}}
+          ]}}')
+    fi
   fi
 
   if [[ -n "$sort_prop" ]]; then
@@ -508,6 +817,10 @@ cmd_update() {
     email)        prop_body=$(jq -n --arg v "$value" '{email:        $v}') ;;
     phone_number) prop_body=$(jq -n --arg v "$value" '{phone_number: $v}') ;;
     date)         prop_body=$(jq -n --arg v "$value" '{date: {start: $v}}') ;;
+    people)
+      resolve_emails "$value"
+      local people_arr="$_RESOLVED_PEOPLE"
+      prop_body=$(jq -n --argjson arr "$people_arr" '{people: $arr}') ;;
     *)            die "Property type '${prop_type}' is not supported for update via CLI." ;;
   esac
 
@@ -889,16 +1202,25 @@ cmd_help() {
   echo -e "\033[1mCOMMANDS:\033[0m"
   echo "  tasks                              List all tasks grouped by Status"
   echo "  tasks --filter <prop> <value>      Filter tasks by property value"
+  echo "                                     For 'people'/'created_by' props, <value> is a handle"
   echo "  tasks --sort <prop> [asc|desc]     Sort task list by property"
   echo "  tasks <No.>                        Show task details and comments"
   echo "  comment <No.> \"text\"               Add a comment to a task"
   echo "  update <No.> <property> <value>    Update a task property"
+  echo "                                     For people props, <value> is handle[,handle,...]"
   echo "  create --title \"...\" [--prop val]  Create a new task"
   echo "  open <No.>                         Print the Notion URL for a task"
+  echo "  people                             List all workspace members with handles"
+  echo "  assign <No.> <handle[,handle,...]> Set assignees on a task (replaces all)"
+  echo "  unassign <No.> <handle[,handle,..] Remove specific assignees from a task"
   echo "  dbs                                List available DB aliases from .env.notion"
   echo "  bootstrap                          Provision DB with standard task management properties"
   echo "  rules                              Display workspace best practices"
   echo "  help                               Show this help"
+  echo ""
+  echo -e "\033[1mEMAIL RESOLUTION:\033[0m"
+  echo "  People commands accept email addresses (matched case-insensitively)."
+  echo "  Run 'notion people' to see all emails and user IDs."
   echo ""
   echo -e "\033[1mENV\033[0m (.env.notion):"
   echo "  NOTION_API_KEY=secret_xxx"
@@ -912,15 +1234,21 @@ cmd_help() {
   echo "  ./notion --db 3da11e67af4180c4... tasks"
   echo "  ./notion tasks 42"
   echo "  ./notion tasks --filter stage \"In Progress\""
+  echo "  ./notion tasks --filter \"Assigned To\" waqas@example.com"
+  echo "  ./notion tasks --filter \"Created By\" ako@example.com"
   echo "  ./notion tasks --sort \"No.\" desc"
   echo "  ./notion comment 42 \"Blocked on design review\""
   echo "  ./notion update 42 stage \"Done\""
   echo "  ./notion update 42 priority \"High\""
   echo "  ./notion update 42 \"due date\" 2026-09-15"
+  echo "  ./notion update 42 \"Assigned To\" \"waqas@example.com,syed@example.com\""
   echo "  ./notion create --title \"Fix login bug\" --stage \"To Do\" --priority \"High\""
   echo "  ./notion --db ventures create --title \"New venture\""
   echo "  ./notion open 42"
   echo "  ./notion dbs"
+  echo "  ./notion people"
+  echo "  ./notion assign 42 waqas@example.com,syed@example.com"
+  echo "  ./notion unassign 42 ako@example.com"
   echo ""
 }
 
@@ -982,6 +1310,17 @@ case "$COMMAND" in
     ;;
   dbs)
     cmd_dbs
+    ;;
+  people)
+    cmd_people
+    ;;
+  assign)
+    if [[ $# -lt 2 ]]; then die "Usage: notion assign <No.> <handle[,handle,...]>"; fi
+    cmd_assign "$1" "$2"
+    ;;
+  unassign)
+    if [[ $# -lt 2 ]]; then die "Usage: notion unassign <No.> <handle[,handle,...]>"; fi
+    cmd_unassign "$1" "$2"
     ;;
   help|--help|-h)
     cmd_help
