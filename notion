@@ -1106,6 +1106,167 @@ cmd_rules() {
   echo ""
 }
 
+
+# ---------------------------------------------------------------------------
+# cmd: workflow — display dev & ops workflow guide
+# ---------------------------------------------------------------------------
+cmd_workflow() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Project-specific first (.kiro/steering/workflow.md), then generic fallback
+  local workflow_file=""
+  if [[ -f "${PWD}/.kiro/steering/workflow.md" ]]; then
+    workflow_file="${PWD}/.kiro/steering/workflow.md"
+  elif [[ -f "${script_dir}/WORKFLOW.md" ]]; then
+    workflow_file="${script_dir}/WORKFLOW.md"
+  else
+    die "No workflow file found. Expected .kiro/steering/workflow.md or ${script_dir}/WORKFLOW.md"
+  fi
+
+  echo ""
+  bold "══════════════════════════════════════════════════"
+  bold " Dev & Ops Workflow"
+  bold "══════════════════════════════════════════════════"
+  echo ""
+
+  # Skip leading front-matter block (--- ... ---)
+  local in_frontmatter=1
+  local fm_opened=0
+
+  while IFS= read -r line; do
+    if [[ "$in_frontmatter" -eq 1 ]]; then
+      if [[ "$line" == "---" && "$fm_opened" -eq 0 ]]; then
+        fm_opened=1; continue
+      elif [[ "$line" == "---" && "$fm_opened" -eq 1 ]]; then
+        in_frontmatter=0; continue
+      elif [[ "$fm_opened" -eq 1 ]]; then
+        continue
+      else
+        in_frontmatter=0
+      fi
+    fi
+
+    if [[ "$line" =~ ^##[[:space:]] ]]; then
+      echo ""
+      bold "${line}"
+    elif [[ "$line" =~ ^\|.*\| ]]; then
+      dim "$line"
+    else
+      echo "$line"
+    fi
+  done < "$workflow_file"
+
+  echo ""
+  dim "Source: ${workflow_file}"
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
+# cmd: workflows [name] — list all workflows (index) or show a specific one
+# ---------------------------------------------------------------------------
+cmd_workflows() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local workflows_dir="${script_dir}/workflows"
+
+  if [[ ! -d "$workflows_dir" ]]; then
+    die "workflows/ directory not found at: ${workflows_dir}"
+  fi
+
+  local name="${1:-}"
+
+  # No argument — show the index (README.md)
+  if [[ -z "$name" ]]; then
+    local index_file="${workflows_dir}/README.md"
+    if [[ ! -f "$index_file" ]]; then
+      die "workflows/README.md not found at: ${index_file}"
+    fi
+
+    echo ""
+    bold "══════════════════════════════════════════════════"
+    bold " Workflows"
+    bold "══════════════════════════════════════════════════"
+    echo ""
+
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^##[[:space:]] ]]; then
+        echo ""
+        bold "${line}"
+      elif [[ "$line" =~ ^\|.*\| ]]; then
+        dim "$line"
+      elif [[ "$line" =~ ^\`\`\` ]]; then
+        dim "$line"
+      else
+        echo "$line"
+      fi
+    done < "$index_file"
+
+    echo ""
+    dim "Source: ${index_file}"
+    echo ""
+    return
+  fi
+
+  # Argument given — find and display the workflow file
+  local workflow_file="${workflows_dir}/${name}.md"
+
+  if [[ ! -f "$workflow_file" ]]; then
+    # List available workflows to help the user
+    local available
+    available=$(ls "${workflows_dir}"/*.md 2>/dev/null \
+      | xargs -I{} basename {} .md \
+      | grep -v README \
+      | sort \
+      | tr '\n' ' ')
+    die "Workflow '${name}' not found. Available: ${available% }"
+  fi
+
+  # Derive a display title from the filename
+  local display_title
+  display_title=$(basename "$workflow_file" .md | tr '-' ' ' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')
+
+  echo ""
+  bold "══════════════════════════════════════════════════"
+  bold " ${display_title} Workflow"
+  bold "══════════════════════════════════════════════════"
+  echo ""
+
+  # Skip leading front-matter block (--- ... ---)
+  local in_frontmatter=1
+  local fm_opened=0
+
+  while IFS= read -r line; do
+    if [[ "$in_frontmatter" -eq 1 ]]; then
+      if [[ "$line" == "---" && "$fm_opened" -eq 0 ]]; then
+        fm_opened=1; continue
+      elif [[ "$line" == "---" && "$fm_opened" -eq 1 ]]; then
+        in_frontmatter=0; continue
+      elif [[ "$fm_opened" -eq 1 ]]; then
+        continue
+      else
+        in_frontmatter=0
+      fi
+    fi
+
+    if [[ "$line" =~ ^#[[:space:]] ]]; then
+      # Top-level heading — skip (already shown in the header)
+      continue
+    elif [[ "$line" =~ ^##[[:space:]] ]]; then
+      echo ""
+      bold "${line}"
+    elif [[ "$line" =~ ^\|.*\| ]]; then
+      dim "$line"
+    else
+      echo "$line"
+    fi
+  done < "$workflow_file"
+
+  echo ""
+  dim "Source: ${workflow_file}"
+  echo ""
+}
+
 # ---------------------------------------------------------------------------
 # cmd: open <No.>
 # ---------------------------------------------------------------------------
@@ -1216,6 +1377,12 @@ cmd_help() {
   echo "  dbs                                List available DB aliases from .env.notion"
   echo "  bootstrap                          Provision DB with standard task management properties"
   echo "  rules                              Display workspace best practices"
+  echo "  workflow                           Display dev & ops workflow guide (legacy)"
+  echo "  workflows                          List all available workflows"
+  echo "  workflows <name>                   Show a specific workflow in detail"
+  echo "                                     Names: development, review, testing, deployment,"
+  echo "                                            planning, task-creation, bug-reporting,"
+  echo "                                            hotfix, release, onboarding"
   echo "  help                               Show this help"
   echo ""
   echo -e "\033[1mEMAIL RESOLUTION:\033[0m"
@@ -1264,7 +1431,7 @@ if [[ "$COMMAND" != "help" && "$COMMAND" != "--help" && "$COMMAND" != "-h" ]]; t
   # bootstrap --help, rules, and dbs are allowed without .env.notion / a valid DB ID
   if [[ "$COMMAND" == "bootstrap" && $# -gt 0 && ( "$1" == "--help" || "$1" == "-h" || "$1" == "help" ) ]]; then
     true
-  elif [[ "$COMMAND" == "rules" || "$COMMAND" == "dbs" ]]; then
+  elif [[ "$COMMAND" == "rules" || "$COMMAND" == "dbs" || "$COMMAND" == "workflow" || "$COMMAND" == "workflows" ]]; then
     true
   else
     require_env
@@ -1307,6 +1474,12 @@ case "$COMMAND" in
     ;;
   rules)
     cmd_rules
+    ;;
+  workflow)
+    cmd_workflow
+    ;;
+  workflows)
+    cmd_workflows "${1:-}"
     ;;
   dbs)
     cmd_dbs
