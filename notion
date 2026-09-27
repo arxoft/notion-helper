@@ -731,31 +731,82 @@ cmd_add_comment() {
   local page_id
   page_id=$(resolve_page_id "$no")
 
-  # Build a rich_text array that renders URLs as clickable links.
-  # Strategy: split the text on URLs, emit plain-text segments and link
-  # segments alternately, then combine into a JSON array with jq.
+  # Convert a lightweight markdown string into a Notion rich_text array.
+  #
+  # Supported inline syntax:
+  #   **text**        → bold
+  #   **`text`**      → bold + code
+  #   _text_          → italic (word-boundary aware; underscores inside identifiers ignored)
+  #   *text*          → italic
+  #   `text`          → inline code
+  #   ~~text~~        → strikethrough
+  #   [label](url)    → markdown link
+  #   https://...     → clickable link (auto-detected in plain text)
   local rich_text_json
   rich_text_json=$(python3 -c "
 import re, json, sys
 
-text = sys.argv[1]
-url_re = re.compile(r'(https?://[^\s]+)')
-parts = url_re.split(text)
-segments = []
-for part in parts:
-    if not part:
-        continue
-    if url_re.match(part):
-        segments.append({
-            'type': 'text',
-            'text': {'content': part, 'link': {'url': part}}
-        })
-    else:
-        segments.append({
-            'type': 'text',
-            'text': {'content': part}
-        })
-print(json.dumps(segments))
+def parse(text):
+    token_re = re.compile(
+        r'\*\*(\`?)(.+?)\1\*\*'                    # **text** bold (or **\`text\`** bold+code)
+        r'|~~(.+?)~~'                               # ~~text~~ strikethrough
+        r'|(?<!\w)_(.+?)_(?!\w)'                   # _text_ italic (word-boundary protected)
+        r'|\*([^\*\s][^\*]*?[^\*\s]|[^\*\s])\*'   # *text* italic
+        r'|\`([^\`]+)\`'                            # \`text\` code
+        r'|\[([^\]]+)\]\((https?://[^\)]+)\)'       # [label](url) markdown link
+        r'|(https?://\S+)'                          # bare URL
+        r'|([^\*\`~\[]+)'                           # plain text
+        r'|(.)'                                     # catch-all single char
+    )
+
+    ann_plain = {'bold': False, 'italic': False, 'code': False,
+                 'strikethrough': False, 'underline': False, 'color': 'default'}
+    segments = []
+
+    for m in token_re.finditer(text):
+        bold_tick, bold_content, strike, u_italic, star_italic, \
+            code, md_label, md_url, url, plain, catch = m.groups()
+
+        if bold_content is not None:
+            segments.append({'type': 'text', 'text': {'content': bold_content},
+                'annotations': {**ann_plain, 'bold': True, 'code': bool(bold_tick)}})
+
+        elif strike is not None:
+            segments.append({'type': 'text', 'text': {'content': strike},
+                'annotations': {**ann_plain, 'strikethrough': True}})
+
+        elif u_italic is not None or star_italic is not None:
+            segments.append({'type': 'text', 'text': {'content': u_italic or star_italic},
+                'annotations': {**ann_plain, 'italic': True}})
+
+        elif code is not None:
+            segments.append({'type': 'text', 'text': {'content': code},
+                'annotations': {**ann_plain, 'code': True}})
+
+        elif md_label is not None and md_url is not None:
+            segments.append({'type': 'text',
+                'text': {'content': md_label, 'link': {'url': md_url}},
+                'annotations': {**ann_plain}})
+
+        elif url is not None:
+            segments.append({'type': 'text',
+                'text': {'content': url, 'link': {'url': url}},
+                'annotations': {**ann_plain}})
+
+        elif plain is not None or catch is not None:
+            chunk = plain if plain is not None else catch
+            url_re = re.compile(r'(https?://\S+)')
+            for part in url_re.split(chunk):
+                if not part:
+                    continue
+                is_url = bool(url_re.fullmatch(part))
+                segments.append({'type': 'text',
+                    'text': {'content': part, **(({'link': {'url': part}}) if is_url else {})},
+                    'annotations': {**ann_plain}})
+
+    return segments
+
+print(json.dumps(parse(sys.argv[1])))
 " "$text")
 
   local body
@@ -836,7 +887,8 @@ cmd_update() {
 # ---------------------------------------------------------------------------
 cmd_create() {
   local title=""
-  declare -A extra_props
+  declare -A extra_props=()
+  extra_props=()  # ensure initialised under set -u
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -973,10 +1025,10 @@ cmd_bootstrap() {
     "Priority": {
       "select": {
         "options": [
-          {"name": "🔴 Critical"},
-          {"name": "🟠 High"},
-          {"name": "🟡 Medium"},
-          {"name": "🟢 Low"}
+          {"name": "Critical"},
+          {"name": "High"},
+          {"name": "Medium"},
+          {"name": "Low"}
         ]
       }
     },
@@ -989,13 +1041,15 @@ cmd_bootstrap() {
     "Tags": {
       "multi_select": {
         "options": [
+          {"name": "coding"},
+          {"name": "need info"},
           {"name": "issue persists"},
           {"name": "reviewed"},
           {"name": "on hold"},
           {"name": "awaiting details"},
           {"name": "cancelled"},
-          {"name": "has-migration"},
-          {"name": "has-env-change"}
+          {"name": "has migration"},
+          {"name": "has env change"}
         ]
       }
     },
@@ -1012,6 +1066,9 @@ cmd_bootstrap() {
     },
     "Git Branch": {
       "rich_text": {}
+    },
+    "Pull Request": {
+      "url": {}
     }
   }')
 
@@ -1299,15 +1356,16 @@ cmd_bootstrap_help() {
   echo "  Name        title        Task title (built-in, rename in Notion UI)"
   echo "  Status      status       Triage · Backlog · Up Next · In Progress · In Review"
   echo "                           In QA · Ready to Deploy · UAT · Completed · Cancelled"
-  echo "  Priority    select       🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low"
+  echo "  Priority    select       Critical · High · Medium · Low"
   echo "  Assignee    people       Team member(s) responsible"
   echo "  Due Date    date         Target completion date"
-  echo "  Tags        multi_select issue persists · reviewed · on hold · awaiting details · cancelled"
-  echo "                           has-migration · has-env-change"
+  echo "  Tags        multi_select issue persists · need info · coding · reviewed · on hold · awaiting details · cancelled"
+  echo "                           has migration · has env change"
   echo "  Notes       rich_text    Free-form notes"
   echo "  URL         url          Reference link"
   echo "  Effort      number       Fibonacci effort points (1 2 3 5 8 13)"
   echo "  Git Branch  rich_text    Associated git branch name"
+  echo "  Pull Request  url    Github pull request URL"
   echo ""
   echo -e "\033[1mPRE-REQUISITES:\033[0m"
   echo ""

@@ -56,7 +56,8 @@ Things to check:
 - If tagged `has-env-change` — are the env changes documented?
 
 Minor issues (typos, formatting, small logic fixes):
-- Unstage the file, fix it, stage again — no new PR needed.
+- Fix the file directly. 
+- The AI agent must never stage files — the human stages the fix when ready.
 
 ---
 
@@ -65,7 +66,6 @@ Minor issues (typos, formatting, small logic fixes):
 If `./review` reports a merge conflict:
 
 - Open the conflicted file(s) and resolve manually.
-- Stage the resolved file: `git add <file>`
 - Conflicts from duplicate additions (two PRs adding the same thing) — take the incoming version unless HEAD has a known improvement.
 - Do not abort unless the conflict is unresolvable without the developer's input — in that case, treat as Issues Found.
 

@@ -36,16 +36,27 @@ Hotfixes follow the same flow on a compressed timeline, skipping the backlog.
 
 ---
 
+## AI Agent — Hard Rules on Git
+
+> The AI agent must **never** run any of the following — under any circumstances, without exception:
+> - `git add` — staging files
+> - `git commit` — creating commits
+> - `git branch -d` / `git branch -D` — deleting branches
+> - `git push` — pushing branches to remote
+
+The AI's role in git is **suggestion only**:
+- Propose branch names — the human creates the branch.
+- Propose commit messages — the human stages files (`git add`) and commits.
+- Propose PR title and body — the human confirms before the PR is created.
+
+These are the defaults that can NEVER be overridden by a project steering file. They are absolute.
+
+
+---
+
 ## Quick Reference
 
-```bash
-notion tasks                          # full board grouped by status
-notion tasks <No.>                    # task detail + comments
-notion tasks --filter Status "Up Next"
-notion rules                          # board rules
-notion workflows                      # this index
-notion workflows development          # development workflow detail
-```
+See `notion`
 
 ---
 
@@ -59,3 +70,5 @@ To be double sure, see a `workflows.md` steering file at `.kiro/steering/workflo
 in this workspace. Pick it up automatically if it exists and treat it as the 
 authoritative override for this workspace. Any instructions in that file take 
 precedence over `notion workflows` and `notion workflows <name>`.
+
+There can be mutliple Git repos in some workpsaces. The workspaces.md steering should name them with their root branches.

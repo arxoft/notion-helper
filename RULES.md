@@ -40,6 +40,11 @@ We need to fix the issue where the login page redirects users in a loop when the
 - Comments have a **character limit** — keep each comment focused.
 - If a comment is getting long, **break it into multiple shorter comments**.
 - One comment per concern: status update, blocker, question, decision — not all at once.
+- **Always use rich text formatting** to make comments easy to read:
+  - `**bold**` for emphasis, versions, branch names, key terms
+  - `` `backticks` `` for file names, function names, branch names, commands
+  - `~~strikethrough~~` for corrections or things that no longer apply
+  - `[label](url)` for links with meaningful labels; bare URLs auto-link too
 
 **Good (multiple short comments):**
 ```
@@ -141,7 +146,7 @@ These tags help the team prepare the environment before or during deployment and
 | Title length  | 9–12 words max                                                            |
 | Description   | Always fill in Notes/Description — include what, why, acceptance criteria |
 | Relevant docs | Reference any related specs, designs, or docs in the description          |
-| Comments      | Keep short; split long thoughts into multiple comments                    |
+| Comments      | Keep short; split long thoughts into multiple comments and use rich text formatting (`**bold**`, `` `code` ``, `[label](url)`) |
 | Status change | Always comment before updating the Status property                        |
 | Tags          | Add `has-migration` or `has-env-change` when applicable                   |
 | Effort        | Set Fibonacci points (1–13); 13 = too big, consider splitting             |
