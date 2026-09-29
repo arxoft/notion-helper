@@ -11,7 +11,7 @@ Tasks reach **Pending Deployment** after review passes. This workflow covers wha
 ## 1. Check the Task
 
 ```bash
-notion tasks <No.>
+notion task show <No.>
 ```
 
 Before deploying, verify:
@@ -51,8 +51,8 @@ Common steps may include:
 After deploying, move the task to **Testing** and leave a comment:
 
 ```bash
-notion comment <No.> "Deployed to production. [Note anything relevant — migration run, env updated, etc.]"
-notion update <No.> Status "Testing"
+notion comment add <No.> "Deployed to production. [Note anything relevant — migration run, env updated, etc.]"
+notion task update <No.> Status "Testing"
 ```
 
 ---
@@ -62,10 +62,10 @@ notion update <No.> Status "Testing"
 If the deploy fails or causes a regression:
 
 ```bash
-notion comment <No.> "Deployment failed: [describe what went wrong]"
-notion update <No.> Tags "issue-persists"
-notion update <No.> "Assigned To" "<developer-email>"
-notion update <No.> Status "Up Next"
+notion comment add <No.> "Deployment failed: [describe what went wrong]"
+notion task update <No.> Tags "issue-persists"
+notion task update <No.> "Assigned To" "<developer-email>"
+notion task update <No.> Status "Up Next"
 ```
 
 Rollback if necessary, following project infrastructure docs.

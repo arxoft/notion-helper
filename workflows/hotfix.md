@@ -17,12 +17,12 @@ A hotfix is a fast-track path for critical production issues. It intentionally b
 ## 1. Create the Hotfix Task
 
 ```bash
-notion create --title "Hotfix: short description of the issue" --Status "In Progress" --Priority "Critical"
+notion task create --title "Hotfix: short description of the issue" --Status "In Progress" --Priority "Critical"
 ```
 
 - Tag it immediately:
 ```bash
-notion update <No.> Tags "hotfix"
+notion task update <No.> Tags "hotfix"
 ```
 
 - Write a description with full bug details (follow the Bug Reporting workflow format).
@@ -42,7 +42,7 @@ git checkout -b <root-branch>_<No.>-hotfix-short-description
 Confirm the branch name with the human first, then populate `Branch Name` on the task:
 
 ```bash
-notion update <No.> "Branch Name" "<root-branch>_0099-hotfix-short-description"
+notion task update <No.> "Branch Name" "<root-branch>_0099-hotfix-short-description"
 ```
 
 ---
@@ -72,8 +72,8 @@ Hotfixes still get reviewed — but fast. The reviewer focuses only on:
 If approved, skip the normal queue — merge immediately.
 
 ```bash
-notion comment <No.> "Hotfix reviewed and approved. Merging."
-notion update <No.> Tags "reviewed"
+notion comment add <No.> "Hotfix reviewed and approved. Merging."
+notion task update <No.> Tags "reviewed"
 ```
 
 ---
@@ -83,8 +83,8 @@ notion update <No.> Tags "reviewed"
 Follow the deployment workflow. Note the urgency in the deploy comment:
 
 ```bash
-notion comment <No.> "Hotfix deployed to production. Monitoring for stability."
-notion update <No.> Status "Testing"
+notion comment add <No.> "Hotfix deployed to production. Monitoring for stability."
+notion task update <No.> Status "Testing"
 ```
 
 Monitor production after the deploy.
@@ -96,16 +96,16 @@ Monitor production after the deploy.
 Test the fix in production. If stable:
 
 ```bash
-notion comment <No.> "Hotfix verified in production. No regressions observed."
-notion update <No.> Status "Completed"
+notion comment add <No.> "Hotfix verified in production. No regressions observed."
+notion task update <No.> Status "Completed"
 ```
 
 If issues persist:
 
 ```bash
-notion comment <No.> "Hotfix did not resolve the issue: [details]"
-notion update <No.> Tags "issue-persists"
-notion update <No.> Status "In Progress"
+notion comment add <No.> "Hotfix did not resolve the issue: [details]"
+notion task update <No.> Tags "issue-persists"
+notion task update <No.> Status "In Progress"
 ```
 
 ---

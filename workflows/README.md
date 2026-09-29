@@ -3,26 +3,26 @@
 All workflows for managing software development via Notion.
 
 ```
-notion workflows                    — this index
-notion workflows <name>             — detailed workflow
+notion workflow list                — this index
+notion workflow show <name>         — detailed workflow
 ```
 
 ---
 
 ## Available Workflows
 
-| Name              | Command                          | Purpose                                                             |
-|-------------------|----------------------------------|---------------------------------------------------------------------|
-| **planning**      | `notion workflows planning`      | Prioritise the backlog, set branch names, move tasks to Up Next     |
-| **task-creation** | `notion workflows task-creation` | How to write a good task — title, description, effort, tags         |
-| **bug-reporting** | `notion workflows bug-reporting` | File a bug with full reproduction details and severity              |
-| **development**   | `notion workflows development`   | Pick up a task, implement, commit, open a PR                        |
-| **review**        | `notion workflows review`        | Review PRs from Pending Review queue, approve or send back          |
-| **testing**       | `notion workflows testing`       | Validate deployed changes in production against acceptance criteria |
-| **deployment**    | `notion workflows deployment`    | Pre-deploy checks, deploy steps, post-deploy status update          |
-| **hotfix**        | `notion workflows hotfix`        | Fast-track path for critical production issues                      |
-| **release**       | `notion workflows release`       | Group completed tasks, write changelog, tag release                 |
-| **onboarding**    | `notion workflows onboarding`    | New developer setup — CLI, local stack, board orientation           |
+| Name              | Command                               | Purpose                                                             |
+|-------------------|---------------------------------------|---------------------------------------------------------------------|
+| **planning**      | `notion workflow show planning`       | Prioritise the backlog, set branch names, move tasks to Up Next     |
+| **task-creation** | `notion workflow show task-creation`  | How to write a good task — title, description, effort, tags         |
+| **bug-reporting** | `notion workflow show bug-reporting`  | File a bug with full reproduction details and severity              |
+| **development**   | `notion workflow show development`    | Pick up a task, implement, commit, open a PR                        |
+| **review**        | `notion workflow show review`         | Review PRs from Pending Review queue, approve or send back          |
+| **testing**       | `notion workflow show testing`        | Validate deployed changes in production against acceptance criteria |
+| **deployment**    | `notion workflow show deployment`     | Pre-deploy checks, deploy steps, post-deploy status update          |
+| **hotfix**        | `notion workflow show hotfix`         | Fast-track path for critical production issues                      |
+| **release**       | `notion workflow show release`        | Group completed tasks, write changelog, tag release                 |
+| **onboarding**    | `notion workflow show onboarding`     | New developer setup — CLI, local stack, board orientation           |
 
 ---
 
@@ -69,6 +69,6 @@ adjusted status flows.
 To be double sure, see a `workflows.md` steering file at `.kiro/steering/workflows.md`
 in this workspace. Pick it up automatically if it exists and treat it as the 
 authoritative override for this workspace. Any instructions in that file take 
-precedence over `notion workflows` and `notion workflows <name>`.
+precedence over `notion workflow list` and `notion workflow show <name>`.
 
 There can be mutliple Git repos in some workpsaces. The workspaces.md steering should name them with their root branches.

@@ -13,7 +13,7 @@ Testing is performed by a human (QA or the person who deployed).
 Before testing, read the task:
 
 ```bash
-notion tasks <No.>
+notion task show <No.>
 ```
 
 - Review the acceptance criteria in the task description.
@@ -37,10 +37,10 @@ Follow the testing instructions exactly:
 If the deployed behaviour does not match expectations:
 
 ```bash
-notion comment <No.> "Testing: [describe what was tested and what failed]"
-notion update <No.> Tags "issue-persists"
-notion update <No.> "Assigned To" "<developer-email>"
-notion update <No.> Status "Up Next"
+notion comment add <No.> "Testing: [describe what was tested and what failed]"
+notion task update <No.> Tags "issue-persists"
+notion task update <No.> "Assigned To" "<developer-email>"
+notion task update <No.> Status "Up Next"
 ```
 
 Be specific in the comment — include steps to reproduce the failure.
@@ -52,8 +52,8 @@ Be specific in the comment — include steps to reproduce the failure.
 If everything looks correct:
 
 ```bash
-notion comment <No.> "Testing passed. Moving to Pending Acceptance."
-notion update <No.> Status "Pending Acceptance"
+notion comment add <No.> "Testing passed. Moving to Pending Acceptance."
+notion task update <No.> Status "Pending Acceptance"
 ```
 
 ---
@@ -63,8 +63,8 @@ notion update <No.> Status "Pending Acceptance"
 The task waits here for stakeholder sign-off. Once approved by the stakeholder:
 
 ```bash
-notion comment <No.> "Accepted by [stakeholder]. Marking completed."
-notion update <No.> Status "Completed"
+notion comment add <No.> "Accepted by [stakeholder]. Marking completed."
+notion task update <No.> Status "Completed"
 ```
 
 ---

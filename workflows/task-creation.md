@@ -9,7 +9,7 @@ Every piece of work starts as a Notion task. A well-written task saves time for 
 ## 1. Create the Task
 
 ```bash
-notion create --title "Short descriptive title here" --Status "Backlog" --Priority "Medium"
+notion task create --title "Short descriptive title here" --Status "Backlog" --Priority "Medium"
 ```
 
 Title rules (from RULES.md):
@@ -26,7 +26,7 @@ Title rules (from RULES.md):
 Every task must have a description. Open the task and set the Notes/Description property:
 
 ```bash
-notion update <No.> Notes "..."
+notion task update <No.> Notes "..."
 ```
 
 A good description answers three questions:
@@ -63,7 +63,7 @@ See Figma design #42 and the endpoint spec in openapi.yaml section /auth/login.
 ## 4. Set Effort Points
 
 ```bash
-notion update <No.> Effort 3
+notion task update <No.> Effort 3
 ```
 
 | Points | Meaning                                           |
@@ -82,8 +82,8 @@ If a task feels like 13 points, try to break it into smaller tasks first.
 ## 5. Add Tags (if applicable)
 
 ```bash
-notion update <No.> Tags "has-migration"
-notion update <No.> Tags "has-env-change"
+notion task update <No.> Tags "has-migration"
+notion task update <No.> Tags "has-env-change"
 ```
 
 Add these immediately if you already know the task will require them.

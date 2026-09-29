@@ -12,20 +12,20 @@ This team follows **Extreme Programming + Kanban** with a simplified lifecycle. 
 
 The backlog is kept ready at all times, not groomed in batches. Any task in **Backlog** should meet these standards before it can move to **Up Next**:
 
-- Title is 9–12 words, clear intent — see `notion workflows task-creation`
+- Title is 9–12 words, clear intent — see `notion workflow show task-creation`
 - Description answers: what, why, acceptance criteria
 - Effort points are set (Fibonacci 1–13)
 - Linked to a milestone where applicable
 
 ```bash
-notion tasks --filter Status "Backlog"
-notion tasks <No.>
+notion task list --filter Status "Backlog"
+notion task show <No.>
 ```
 
 Flag tasks that are missing information with a comment rather than moving them forward:
 
 ```bash
-notion comment <No.> "Missing acceptance criteria — needs detail before this can be picked up."
+notion comment add <No.> "Missing acceptance criteria — needs detail before this can be picked up."
 ```
 
 ---
@@ -47,13 +47,13 @@ A milestone task on the board represents the parent goal. Its child tasks are th
 Priority is set by ako. Values: **Critical · High · Medium · Low**
 
 ```bash
-notion update <No.> Priority "High"
+notion task update <No.> Priority "High"
 ```
 
 Developers should not change priority without explicit instruction from ako. If a task feels more urgent than its current priority, leave a comment:
 
 ```bash
-notion comment <No.> "This may need to be elevated — [reason]. Flagging for ako."
+notion comment add <No.> "This may need to be elevated — [reason]. Flagging for ako."
 ```
 
 ---
@@ -69,7 +69,7 @@ Branch naming pattern:
 ```
 
 ```bash
-notion update <No.> "Branch Name" "main-master_auth_0071-token-refresh"
+notion task update <No.> "Branch Name" "main-master_auth_0071-token-refresh"
 # e.g. for a project with root branch 'main': main_auth_0071-token-refresh
 ```
 
@@ -80,8 +80,8 @@ notion update <No.> "Branch Name" "main-master_auth_0071-token-refresh"
 When a task is ready and capacity exists, add a comment before changing status:
 
 ```bash
-notion comment <No.> "Ready to be picked up. Moving to Up Next."
-notion update <No.> Status "Up Next"
+notion comment add <No.> "Ready to be picked up. Moving to Up Next."
+notion task update <No.> Status "Up Next"
 ```
 
 ---
@@ -91,7 +91,7 @@ notion update <No.> Status "Up Next"
 Assign to the developer picking it up:
 
 ```bash
-notion assign <No.> "developer@example.com"
+notion task assign <No.> "developer@example.com"
 ```
 
 ---
@@ -100,16 +100,16 @@ notion assign <No.> "developer@example.com"
 
 ```bash
 # What's ready to be picked up
-notion tasks --filter Status "Up Next"
+notion task list --filter Status "Up Next"
 
 # Full backlog
-notion tasks --filter Status "Backlog"
+notion task list --filter Status "Backlog"
 
 # By priority
-notion tasks --filter Priority "Critical"
+notion task list --filter Priority "Critical"
 
 # Assigned to a specific developer
-notion tasks --filter "Assigned To" "developer@example.com"
+notion task list --filter "Assigned To" "developer@example.com"
 ```
 
 ---

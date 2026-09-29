@@ -1,6 +1,6 @@
 # notion
 
-A minimal Notion CLI for task management. List, view, create, update tasks and add comments — all from the terminal.
+A Notion CLI for task management. List, view, create, and update tasks, add comments — all from the terminal.
 
 **Requires:** `bash`, `curl`, `jq`
 
@@ -10,7 +10,7 @@ A minimal Notion CLI for task management. List, view, create, update tasks and a
 
 ### 1. Create a Notion integration
 
-Go to [notion.so/profile/integrations](https://www.notion.so/profile/integrations) → **New integration** → give it a name → select your workspace → Save.
+Go to [notion.so/profile/integrations](https://www.notion.so/profile/integrations) → **New integration** → name it → select your workspace → Save.
 
 Enable these capabilities:
 - Read content
@@ -21,7 +21,7 @@ Enable these capabilities:
 
 Copy the `secret_xxx` API key.
 
-### 2. Connect integration to your database
+### 2. Connect the integration to your database
 
 Open your task board in Notion → `...` (top right) → **Connections** → find your integration → connect.
 
@@ -43,6 +43,7 @@ NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 |---|---|---|---|
 | `NOTION_API_KEY` | ✓ | — | Integration secret from Notion |
 | `NOTION_DATABASE_ID` | ✓ | — | ID from the board URL |
+| `NOTION_TITLE_PROPERTY_NAME` | | `Task name` | Name of the title property in your database |
 
 The script reads `.env.notion` from whichever directory you call it from, so each project can have its own file pointing to a different database.
 
@@ -53,11 +54,9 @@ The script reads `.env.notion` from whichever directory you call it from, so eac
 To call `notion` from anywhere:
 
 ```bash
-# copy to a directory on your PATH
 cp /path/to/notion ~/.local/bin/notion
 chmod +x ~/.local/bin/notion
 
-# verify
 which notion
 notion help
 ```
@@ -65,7 +64,7 @@ notion help
 Then from any project directory that has a `.env.notion`:
 ```bash
 cd ~/my-project
-notion tasks
+notion task list
 ```
 
 ---
@@ -73,58 +72,113 @@ notion tasks
 ## Usage
 
 ```
-notion <command> [arguments]
+notion [--db <id|alias>] <resource> <action> [target] [flags]
 ```
+
+### task
 
 | Command | Description |
 |---|---|
-| `notion tasks` | List all tasks grouped by `Status` |
-| `notion tasks <No.>` | Show all properties + comments for a task |
-| `notion tasks --filter <prop> <value>` | Filter tasks by any property |
-| `notion tasks --sort <prop> [asc\|desc]` | Sort task list |
-| `notion comment <No.> "text"` | Add a comment to a task |
-| `notion update <No.> <property> <value>` | Update a task property |
-| `notion create --title "..." [--prop val]` | Create a new task |
-| `notion open <No.>` | Print the Notion URL for a task |
-| `notion help` | Show usage |
+| `notion task list` | List all tasks grouped by Status |
+| `notion task list --filter <prop> <value>` | Filter tasks by property value |
+| `notion task list --sort <prop> [asc\|desc]` | Sort task list |
+| `notion task show <No.>` | Show all properties + comments for a task |
+| `notion task create --title "..." [--prop val]` | Create a new task |
+| `notion task update <No.> <property> <value>` | Update a task property |
+| `notion task assign <No.> <email[,email,...]>` | Set assignees (replaces all) |
+| `notion task unassign <No.> <email[,email,...]>` | Remove specific assignees |
 
-Tasks are addressed by their `No.` — the built-in auto-incremented ID per database. Property names are case-insensitive.
+### comment
+
+| Command | Description |
+|---|---|
+| `notion comment add <No.> "text"` | Add a comment to a task |
+
+### user
+
+| Command | Description |
+|---|---|
+| `notion user list` | List all workspace members with emails |
+
+### db
+
+| Command | Description |
+|---|---|
+| `notion db list` | List available DB aliases from .env.notion |
+| `notion db bootstrap` | Provision DB with standard task management schema |
+| `notion db bootstrap --help` | Show bootstrap details and prerequisites |
+
+### reference
+
+| Command | Description |
+|---|---|
+| `notion rules` | Display workspace best practices |
+| `notion workflow list` | List all available workflows |
+| `notion workflow show <name>` | Show a specific workflow |
 
 ---
 
 ## Examples
 
 ```bash
-# list all tasks
-notion tasks
+# list tasks
+notion task list
+notion task list --filter Status "In Progress"
+notion task list --filter "Assigned To" user@example.com
+notion task list --sort "No." desc
 
-# view task detail with comments
-notion tasks 42
+# view a task
+notion task show 42
 
-# filter and sort
-notion tasks --filter stage "In Progress"
-notion tasks --sort "No." desc
+# create and update
+notion task create --title "Fix login bug" --Status "To Do" --Priority "High"
+notion task update 42 Status "In Review"
+notion task update 42 "Due Date" 2026-09-15
+notion task update 42 Effort 5
 
-# add a comment
-notion comment 42 "Blocked on design review"
+# comments
+notion comment add 42 "Blocked on design review"
+notion comment add 42 "Fixed in \`auth/session.ts\` — see PR [#88](https://github.com/...)"
 
-# update properties
-notion update 42 stage "Done"
-notion update 42 priority "High"
-notion update 42 "due date" 2026-09-15
+# assignees
+notion task assign 42 user@example.com,other@example.com
+notion task unassign 42 user@example.com
 
-# create a task
-notion create --title "Fix login bug" --stage "To Do" --priority "High"
+# workspace members
+notion user list
 
-# get the Notion URL
-notion open 42
+# multiple databases
+notion db list
+notion --db ventures task list
+notion --db ventures task create --title "New venture"
+
+# reference
+notion rules
+notion workflow list
+notion workflow show development
 ```
+
+---
+
+## Multiple databases
+
+Define aliases in `.env.notion`:
+
+```
+NOTION_DATABASE_ID=xxxxxxxx                    # default
+NOTION_DATABASE_ID:VENTURES=xxxxxxxx           # notion --db ventures
+NOTION_DATABASE_ID:CLIENTS=xxxxxxxx            # notion --db clients
+```
+
+`--db` accepts either an alias or a raw UUID and overrides `NOTION_DATABASE_ID` for that invocation only.
 
 ---
 
 ## Notes
 
-- `No.` resolution queries the database for `unique_id.equals = <No.>` to get the internal page UUID before any operation.
-- `update` auto-detects the property type from the page schema and builds the correct API payload. Supported types: `title`, `rich_text`, `select`, `status`, `multi_select`, `number`, `checkbox`, `url`, `email`, `phone_number`, `date`.
-- `create` fetches the database schema to infer types for any extra `--prop` flags.
-- If `.env.notion` is not found in the current directory, the script exits with an error and lists the required variables.
+- Tasks are addressed by `No.` — the auto-incrementing `unique_id` per database.
+- Property names in `task update` and `task list --filter` are case-insensitive.
+- `task update` auto-detects property type from the page schema. Supported types: `title`, `rich_text`, `select`, `status`, `multi_select`, `number`, `checkbox`, `url`, `email`, `phone_number`, `date`, `people`.
+- `task create` accepts any `--<PropertyName> <value>` flag and infers the type from the database schema.
+- `comment add` supports inline markdown: `**bold**`, `` `code` ``, `_italic_`, `~~strikethrough~~`, `[label](url)`.
+- People filters and `task assign` accept email addresses matched case-insensitively. Run `notion user list` to see all emails.

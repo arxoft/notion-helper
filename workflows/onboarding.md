@@ -12,7 +12,7 @@ Before touching any code or tasks:
 
 ```bash
 notion rules          # board rules — how tasks are managed
-notion workflows      # overview of all workflows
+notion workflow list  # overview of all workflows
 ```
 
 Then read the project's own README for the local dev stack, available commands, and service URLs.
@@ -47,8 +47,8 @@ Get the API key from [notion.so/profile/integrations](https://www.notion.so/prof
 ## 3. Verify CLI Access
 
 ```bash
-notion tasks          # should list the board
-notion people         # should list workspace members
+notion task list      # should list the board
+notion user list      # should list workspace members
 ```
 
 If either fails, check `.env.notion` is present in the current directory and credentials are correct.
@@ -70,7 +70,7 @@ Each project defines its own tooling — look for a wrapper script (`./sail`, `.
 ## 5. Understand the Board
 
 ```bash
-notion tasks
+notion task list
 ```
 
 Get familiar with the current state:
@@ -87,7 +87,7 @@ Ask questions in Notion comments, not in chat. Comments are the record.
 Follow the development workflow:
 
 ```bash
-notion workflows development
+notion workflow show development
 ```
 
 When in doubt — read the task, read the comments, read the existing code. Ask before assuming.

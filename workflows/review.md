@@ -25,7 +25,7 @@ Make sure you are on the correct target branch (the one that will receive the in
 ## 2. Pick Up the Next Review
 
 ```bash
-notion tasks --filter Status "Pending Review"
+notion task list --filter Status "Pending Review"
 ```
 
 Order by **PR number ascending** (lowest PR number first) — unless the reviewer explicitly specifies otherwise. Lower PR numbers were submitted earlier and are less likely to have unresolved dependencies.
@@ -33,7 +33,7 @@ Order by **PR number ascending** (lowest PR number first) — unless the reviewe
 Read the full task:
 
 ```bash
-notion tasks <No.>
+notion task show <No.>
 ```
 
 - Review the task description (what the bug/feature is).
@@ -88,10 +88,10 @@ This discards the staged merge. The working directory returns to the clean base 
 If a significant issue is found:
 
 ```bash
-notion comment <No.> "Review: [describe the issue clearly]"
-notion update <No.> Tags "issue-persists"
-notion update <No.> "Assigned To" "<developer-email>"
-notion update <No.> Status "Up Next"
+notion comment add <No.> "Review: [describe the issue clearly]"
+notion task update <No.> Tags "issue-persists"
+notion task update <No.> "Assigned To" "<developer-email>"
+notion task update <No.> Status "Up Next"
 ```
 
 Also add a review comment on the GitHub PR describing the issue.
@@ -106,9 +106,9 @@ If the review passes:
 2. Tag the task and move status:
 
 ```bash
-notion comment <No.> "Review passed. Merging and moving to Pending Deployment."
-notion update <No.> Tags "reviewed"
-notion update <No.> Status "Pending Deployment"
+notion comment add <No.> "Review passed. Merging and moving to Pending Deployment."
+notion task update <No.> Tags "reviewed"
+notion task update <No.> Status "Pending Deployment"
 ```
 
 Move on to the next **Pending Review** task.

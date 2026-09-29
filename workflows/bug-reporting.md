@@ -9,7 +9,7 @@ Bugs are tasks too — they go through the same status flow and follow the same 
 ## 1. Create the Bug Task
 
 ```bash
-notion create --title "Short description of the bug" --Status "Backlog" --Priority "High"
+notion task create --title "Short description of the bug" --Status "Backlog" --Priority "High"
 ```
 
 Title convention for bugs: describe the broken behaviour, not the fix.
@@ -24,7 +24,7 @@ Title convention for bugs: describe the broken behaviour, not the fix.
 Set the Notes/Description property with all of the following:
 
 ```bash
-notion update <No.> Notes "..."
+notion task update <No.> Notes "..."
 ```
 
 ### Required fields in the description:
@@ -80,7 +80,7 @@ Acceptance Criteria:
 If you have screenshots, error logs, or network traces — paste relevant excerpts into the description or a comment:
 
 ```bash
-notion comment <No.> "Error from server log: [paste excerpt]"
+notion comment add <No.> "Error from server log: [paste excerpt]"
 ```
 
 ---
@@ -90,7 +90,7 @@ notion comment <No.> "Error from server log: [paste excerpt]"
 Map severity to the Priority field:
 
 ```bash
-notion update <No.> Priority "Critical"
+notion task update <No.> Priority "Critical"
 ```
 
 Critical bugs skip the normal backlog queue — flag them immediately and notify the team.

@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ./notion — Notion CLI for task management via Notion API
+# notion — Notion CLI for task management via Notion API
 # =============================================================================
 # Usage:
-#   ./notion [--db <id|alias>] tasks              List all tasks grouped by Status
-#   ./notion [--db <id|alias>] tasks <No.>        Show task details + comments
-#   ./notion [--db <id|alias>] tasks --filter <prop> <val>
-#   ./notion [--db <id|alias>] tasks --sort <prop> [asc|desc]
-#   ./notion [--db <id|alias>] comment <No.> "text"
-#   ./notion [--db <id|alias>] update <No.> <property> <value>
-#   ./notion [--db <id|alias>] create --title "..." [--prop val]
-#   ./notion [--db <id|alias>] open <No.>
-#   ./notion dbs                                  List available DB aliases
-#   ./notion rules                                Display workspace best practices
+#   notion task list                              List tasks grouped by Status
+#   notion task list --filter <prop> <val>        Filter tasks
+#   notion task list --sort <prop> [asc|desc]     Sort tasks
+#   notion task show <No.>                        Show task details + comments
+#   notion task create --title "..." [--prop val] Create a task
+#   notion task update <No.> <property> <value>   Update a task property
+#   notion comment add <No.> "text"               Add a comment
+#   notion user list                              List workspace members
+#   notion task assign <No.> <email[,email,...]>  Set assignees (replaces all)
+#   notion task unassign <No.> <email[,email,..]> Remove specific assignees
+#   notion db list                                List DB aliases
+#   notion db bootstrap                           Provision DB with standard schema
+#   notion rules                                  Display workspace best practices
+#   notion workflow list                          List available workflows
+#   notion workflow show <name>                   Show a specific workflow
 #
 # --db overrides NOTION_DATABASE_ID for this invocation only.
-# Aliases are defined in .env.notion as NOTION_DB_<ALIAS>=<uuid>
-# e.g.  NOTION_DB_VENTURES=3da11e67af4180c4...
-#       notion --db ventures tasks
+# Aliases are defined in .env.notion as NOTION_DATABASE_ID:<ALIAS>=<uuid>
+# e.g.  NOTION_DATABASE_ID:VENTURES=3da11e67af4180c4...
+#       notion --db ventures task list
 # =============================================================================
 
 set -uo pipefail
@@ -36,23 +41,21 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+# Declare before the parsing loop to avoid set -u issues
+declare -A _NOTION_DB_ALIASES=()
+
 while IFS= read -r _line || [[ -n "$_line" ]]; do
-  # strip inline comments and carriage returns
   _line="${_line%%#*}"
   _line="${_line//[$'\r']}"
   [[ -z "${_line// }" ]] && continue
-  # split on first '=' only — handles values that contain '=' (e.g. base64 keys)
   _key="${_line%%=*}"
   _val="${_line#*=}"
-  # trim whitespace from key and value
   _key="${_key#"${_key%%[![:space:]]*}"}" ; _key="${_key%"${_key##*[![:space:]]}"}"
   _val="${_val#"${_val%%[![:space:]]*}"}" ; _val="${_val%"${_val##*[![:space:]]}"}"
-  # strip surrounding quotes from value
   _val="${_val#\"}" ; _val="${_val%\"}"
   _val="${_val#\'}" ; _val="${_val%\'}"
-  # Handle NOTION_DATABASE_ID:<ALIAS>=<uuid> — store in associative array, skip export
   if [[ "$_key" =~ ^NOTION_DATABASE_ID:(.+)$ ]]; then
-    _alias="${BASH_REMATCH[1],,}"   # lowercase alias
+    _alias="${BASH_REMATCH[1],,}"
     _NOTION_DB_ALIASES["$_alias"]="$_val"
   elif [[ "$_key" =~ ^NOTION_ ]]; then
     export "$_key"="$_val"
@@ -67,11 +70,8 @@ NOTION_TITLE_PROPERTY_NAME="${NOTION_TITLE_PROPERTY_NAME:-Task name}"
 NOTION_VERSION="2022-06-28"
 BASE_URL="https://api.notion.com/v1"
 
-# Populated during env parsing: alias (lowercase) → uuid
-declare -A _NOTION_DB_ALIASES=()
-
 # ---------------------------------------------------------------------------
-# Early arg parsing — consume --db <id|alias> before the command name
+# Early arg parsing — consume --db <id|alias> before the noun
 # ---------------------------------------------------------------------------
 _DB_OVERRIDE=""
 _REMAINING_ARGS=()
@@ -86,19 +86,16 @@ done
 set -- "${_REMAINING_ARGS[@]+"${_REMAINING_ARGS[@]}"}"
 unset _REMAINING_ARGS
 
-# Resolve alias → UUID if --db was given
 if [[ -n "$_DB_OVERRIDE" ]]; then
-  # Check if it looks like a raw UUID (hex chars and optional hyphens, 32-36 chars)
   if [[ "$_DB_OVERRIDE" =~ ^[0-9a-fA-F-]{32,36}$ ]]; then
     NOTION_DATABASE_ID="$_DB_OVERRIDE"
   else
-    # Look up alias (case-insensitive — aliases stored lowercase)
     _alias_lower="${_DB_OVERRIDE,,}"
     _ALIAS_VAL="${_NOTION_DB_ALIASES[$_alias_lower]:-}"
     if [[ -z "$_ALIAS_VAL" ]]; then
       echo -e "\033[31mERROR:\033[0m DB alias '${_DB_OVERRIDE}' not found." >&2
       echo "  Define it in .env.notion as: NOTION_DATABASE_ID:${_DB_OVERRIDE^^}=<uuid>" >&2
-      echo "  Run 'notion dbs' to see available aliases." >&2
+      echo "  Run 'notion db list' to see available aliases." >&2
       exit 1
     fi
     NOTION_DATABASE_ID="$_ALIAS_VAL"
@@ -108,7 +105,7 @@ fi
 unset _DB_OVERRIDE
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Output helpers
 # ---------------------------------------------------------------------------
 die()    { echo -e "\033[31mERROR:\033[0m $*" >&2; exit 1; }
 info()   { echo -e "\033[36m$*\033[0m"; }
@@ -117,6 +114,9 @@ dim()    { echo -e "\033[2m$*\033[0m"; }
 green()  { echo -e "\033[32m$*\033[0m"; }
 yellow() { echo -e "\033[33m$*\033[0m"; }
 
+# ---------------------------------------------------------------------------
+# Dependency + env guards
+# ---------------------------------------------------------------------------
 require_deps() {
   for cmd in curl jq; do
     command -v "$cmd" &>/dev/null || die "'$cmd' is required but not installed."
@@ -124,156 +124,118 @@ require_deps() {
 }
 
 require_env() {
-  if [[ -z "$NOTION_API_KEY" ]]; then
-    die "NOTION_API_KEY is not set in .env.notion"
+  [[ -z "$NOTION_API_KEY" ]]      && die "NOTION_API_KEY is not set in .env.notion"
+  [[ -z "$NOTION_DATABASE_ID" ]]  && die "NOTION_DATABASE_ID is not set in .env.notion"
+}
+
+# ---------------------------------------------------------------------------
+# API wrappers
+# ---------------------------------------------------------------------------
+_notion_request() {
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+  local response
+
+  if [[ "$method" == "GET" ]]; then
+    response=$(curl -s \
+      -H "Authorization: Bearer ${NOTION_API_KEY}" \
+      -H "Notion-Version: ${NOTION_VERSION}" \
+      -H "Content-Type: application/json" \
+      "${BASE_URL}${path}")
+  else
+    response=$(curl -s \
+      -X "$method" \
+      -H "Authorization: Bearer ${NOTION_API_KEY}" \
+      -H "Notion-Version: ${NOTION_VERSION}" \
+      -H "Content-Type: application/json" \
+      --data "${body:-{\}}" \
+      "${BASE_URL}${path}")
   fi
-  if [[ -z "$NOTION_DATABASE_ID" ]]; then
-    die "NOTION_DATABASE_ID is not set in .env.notion"
+
+  # Surface API errors immediately
+  local obj
+  obj=$(echo "$response" | jq -r '.object // ""')
+  if [[ "$obj" == "error" ]]; then
+    local msg
+    msg=$(echo "$response" | jq -r '.message // "unknown error"')
+    die "Notion API error: $msg"
   fi
+
+  echo "$response"
 }
+
+notion_get()   { _notion_request GET   "$1"; }
+notion_post()  { _notion_request POST  "$1" "$2"; }
+notion_patch() { _notion_request PATCH "$1" "$2"; }
 
 # ---------------------------------------------------------------------------
-# API call wrapper
-# ---------------------------------------------------------------------------
-notion_get() {
-  local path="$1"
-  curl -s \
-    -H "Authorization: Bearer ${NOTION_API_KEY}" \
-    -H "Notion-Version: ${NOTION_VERSION}" \
-    -H "Content-Type: application/json" \
-    "${BASE_URL}${path}"
-}
-
-notion_post() {
-  local path="$1"
-  local body="$2"
-  if [[ -z "$body" ]]; then body="{}"; fi
-  curl -s \
-    -X POST \
-    -H "Authorization: Bearer ${NOTION_API_KEY}" \
-    -H "Notion-Version: ${NOTION_VERSION}" \
-    -H "Content-Type: application/json" \
-    --data "$body" \
-    "${BASE_URL}${path}"
-}
-
-notion_patch() {
-  local path="$1"
-  local body="$2"
-  if [[ -z "$body" ]]; then body="{}"; fi
-  curl -s \
-    -X PATCH \
-    -H "Authorization: Bearer ${NOTION_API_KEY}" \
-    -H "Notion-Version: ${NOTION_VERSION}" \
-    -H "Content-Type: application/json" \
-    --data "$body" \
-    "${BASE_URL}${path}"
-}
-
-# ---------------------------------------------------------------------------
-# Resolve No. → page_id via unique_id filter
+# Resolve task No. → page_id
 # ---------------------------------------------------------------------------
 resolve_page_id() {
   local no="$1"
-  local result
+  local result page_id
   result=$(notion_post "/databases/${NOTION_DATABASE_ID}/query" \
     "{\"filter\":{\"property\":\"ID\",\"unique_id\":{\"equals\":${no}}}}")
-
-  local page_id
   page_id=$(echo "$result" | jq -r '.results[0].id // empty')
-  if [[ -z "$page_id" ]]; then
-    die "No task found with No. = ${no}"
-  fi
+  [[ -z "$page_id" ]] && die "No task found with No. = ${no}"
   echo "$page_id"
 }
 
 # ---------------------------------------------------------------------------
-# Pretty-print a single property value by type
+# Resolve email(s) → user ID(s)
+#
+# resolve_user_id  <email|uuid>  → single ID (echoed)
+# resolve_user_ids <email[,...]> → sets global $_RESOLVED_PEOPLE (JSON array)
 # ---------------------------------------------------------------------------
-print_property() {
-  local name="$1"
-  local prop="$2"
-  local type
-  type=$(echo "$prop" | jq -r '.type')
+_users_json_cache=""
 
-  local value=""
-  case "$type" in
-    title)        value=$(echo "$prop" | jq -r '.title | map(.plain_text) | join("")') ;;
-    rich_text)    value=$(echo "$prop" | jq -r '.rich_text | map(.plain_text) | join("")') ;;
-    number)       value=$(echo "$prop" | jq -r '.number // ""') ;;
-    select)       value=$(echo "$prop" | jq -r '.select.name // ""') ;;
-    multi_select) value=$(echo "$prop" | jq -r '[.multi_select[].name] | join(", ")') ;;
-    status)       value=$(echo "$prop" | jq -r '.status.name // ""') ;;
-    date)         value=$(echo "$prop" | jq -r 'if .date then (.date.start + (if .date.end then " → " + .date.end else "" end)) else "" end') ;;
-    checkbox)     value=$(echo "$prop" | jq -r 'if .checkbox then "✓" else "✗" end') ;;
-    url)          value=$(echo "$prop" | jq -r '.url // ""') ;;
-    email)        value=$(echo "$prop" | jq -r '.email // ""') ;;
-    phone_number) value=$(echo "$prop" | jq -r '.phone_number // ""') ;;
-    people)       value=$(echo "$prop" | jq -r '[.people[].name // .people[].id] | join(", ")') ;;
-    relation)     value=$(echo "$prop" | jq -r '[.relation[].id] | join(", ")') ;;
-    unique_id)    value=$(echo "$prop" | jq -r '(.unique_id.prefix // "") + (.unique_id.number | tostring)') ;;
-    created_time) value=$(echo "$prop" | jq -r '.created_time // ""') ;;
-    last_edited_time) value=$(echo "$prop" | jq -r '.last_edited_time // ""') ;;
-    created_by)   value=$(echo "$prop" | jq -r '.created_by.name // .created_by.id // ""') ;;
-    last_edited_by) value=$(echo "$prop" | jq -r '.last_edited_by.name // .last_edited_by.id // ""') ;;
-    files)        value=$(echo "$prop" | jq -r '[.files[].name] | join(", ")') ;;
-    *)            value="[type: $type]" ;;
-  esac
-
-  printf "  \033[1m%-25s\033[0m %s\n" "${name}:" "$value"
+_fetch_users() {
+  if [[ -z "$_users_json_cache" ]]; then
+    _users_json_cache=$(notion_get "/users")
+  fi
+  echo "$_users_json_cache"
 }
 
-# ---------------------------------------------------------------------------
-# Shared helper: resolve comma-separated handles → JSON array of people objects
-# Usage: resolve_emails "waqas@example.com,syed@example.com"
-# Result is written to global _RESOLVED_PEOPLE (JSON array of people objects).
-# Dies on unknown email. Calling code reads $_RESOLVED_PEOPLE directly — no subshell needed.
-# ---------------------------------------------------------------------------
-_RESOLVED_PEOPLE=""
-
-resolve_emails() {
+resolve_user_id() {
   local input="$1"
-  local users_json
-  users_json=$(notion_get "/users")
-
-  local err
-  err=$(echo "$users_json" | jq -r '.object // ""')
-  if [[ "$err" == "error" ]]; then
-    die "Failed to fetch users: $(echo "$users_json" | jq -r '.message // "unknown error"')"
+  # Pass UUIDs through unchanged
+  if [[ "$input" =~ ^[0-9a-fA-F-]{32,36}$ ]]; then
+    echo "$input"; return
   fi
 
-  # Build a map: lowercase_email → id  (persons only)
-  local user_map
-  user_map=$(echo "$users_json" | jq '[
-    .results[]
-    | select(.type == "person")
-    | {
-        email: (.person.email | ascii_downcase),
-        id:    .id
-      }
-  ]')
+  local users_json email_lower uid valid
+  users_json=$(_fetch_users)
+  email_lower="${input,,}"
 
-  local valid_emails
-  valid_emails=$(echo "$user_map" | jq -r '.[].email' | sort | tr '\n' ' ')
+  uid=$(echo "$users_json" | jq -r --arg e "$email_lower" '
+    .results[] | select(.type == "person")
+    | select((.person.email | ascii_downcase) == $e)
+    | .id
+  ' | head -1)
 
-  # Split input on commas, resolve each email
+  if [[ -z "$uid" ]]; then
+    valid=$(echo "$users_json" | jq -r \
+      '[.results[] | select(.type=="person") | .person.email | ascii_downcase] | sort | join(", ")')
+    die "Unknown email '${input}'. Valid emails: ${valid}"
+  fi
+
+  echo "$uid"
+}
+
+_RESOLVED_PEOPLE=""
+
+resolve_user_ids() {
+  local input="$1"
   local people_array="[]"
+
   IFS=',' read -ra raw_inputs <<< "$input"
   for raw in "${raw_inputs[@]}"; do
-    # trim whitespace
-    local email
+    local email uid
     email="${raw#"${raw%%[![:space:]]*}"}"
     email="${email%"${email##*[![:space:]]}"}"
-    email="${email,,}"   # lowercase for case-insensitive match
 
-    local uid
-    uid=$(echo "$user_map" | jq -r --arg e "$email" \
-      '.[] | select(.email == $e) | .id' | head -1)
-
-    if [[ -z "$uid" ]]; then
-      die "Unknown email '${email}'. Valid emails: ${valid_emails% }"
-    fi
-
+    uid=$(resolve_user_id "$email")
     people_array=$(echo "$people_array" | jq \
       --arg id "$uid" \
       '. + [{"object":"user","id":$id}]')
@@ -283,220 +245,84 @@ resolve_emails() {
 }
 
 # ---------------------------------------------------------------------------
-# Shared helper: resolve a single email (or UUID) → user_id
-# Used by filter logic. Passes UUIDs through unchanged.
+# Build a property patch body from type + value
+# Used by both task create and task update
 # ---------------------------------------------------------------------------
-resolve_handle_to_id() {
-  local input="$1"
-  # If it already looks like a UUID, return as-is
-  if [[ "$input" =~ ^[0-9a-fA-F-]{32,36}$ ]]; then
-    echo "$input"
-    return
-  fi
+build_prop_body() {
+  local prop_type="$1"
+  local value="$2"
 
-  local users_json
-  users_json=$(notion_get "/users")
-
-  local err
-  err=$(echo "$users_json" | jq -r '.object // ""')
-  if [[ "$err" == "error" ]]; then
-    die "Failed to fetch users: $(echo "$users_json" | jq -r '.message // "unknown error"')"
-  fi
-
-  local email_lower="${input,,}"
-  local uid
-  uid=$(echo "$users_json" | jq -r --arg e "$email_lower" '
-    .results[]
-    | select(.type == "person")
-    | select((.person.email | ascii_downcase) == $e)
-    | .id
-  ' | head -1)
-
-  if [[ -z "$uid" ]]; then
-    local valid
-    valid=$(echo "$users_json" | jq -r \
-      '[.results[] | select(.type=="person") | .person.email | ascii_downcase] | sort | join(", ")')
-    die "Unknown email '${input}'. Valid emails: ${valid}"
-  fi
-
-  echo "$uid"
+  case "$prop_type" in
+    title)        jq -n --arg v "$value" '{title:        [{type:"text",text:{content:$v}}]}' ;;
+    rich_text)    jq -n --arg v "$value" '{rich_text:    [{type:"text",text:{content:$v}}]}' ;;
+    select)       jq -n --arg v "$value" '{select:       {name:$v}}' ;;
+    status)       jq -n --arg v "$value" '{status:       {name:$v}}' ;;
+    multi_select) jq -n --arg v "$value" \
+                    '{multi_select: ($v | split(",") | map(ltrimstr(" ") | rtrimstr(" ")) | map({name:.}))}' ;;
+    number)       jq -n --argjson v "$value" '{number: $v}' ;;
+    checkbox)
+      local bv="false"
+      [[ "$value" == "true" || "$value" == "1" || "$value" == "yes" ]] && bv="true"
+      jq -n --argjson v "$bv" '{checkbox: $v}' ;;
+    url)          jq -n --arg v "$value" '{url:          $v}' ;;
+    email)        jq -n --arg v "$value" '{email:        $v}' ;;
+    phone_number) jq -n --arg v "$value" '{phone_number: $v}' ;;
+    date)         jq -n --arg v "$value" '{date:         {start:$v}}' ;;
+    people)
+      resolve_user_ids "$value"
+      jq -n --argjson arr "$_RESOLVED_PEOPLE" '{people: $arr}' ;;
+    *)  die "Property type '${prop_type}' is not supported for this operation." ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
-# cmd: people — list all workspace members
+# Pretty-print a single property value
 # ---------------------------------------------------------------------------
-cmd_people() {
-  info "Fetching workspace members..."
-  local users_json
-  users_json=$(notion_get "/users")
+print_property() {
+  local name="$1"
+  local prop="$2"
+  local type value=""
+  type=$(echo "$prop" | jq -r '.type')
 
-  local err
-  err=$(echo "$users_json" | jq -r '.object // ""')
-  if [[ "$err" == "error" ]]; then
-    die "Failed to fetch users: $(echo "$users_json" | jq -r '.message // "unknown error"')"
-  fi
+  case "$type" in
+    title)            value=$(echo "$prop" | jq -r '.title | map(.plain_text) | join("")') ;;
+    rich_text)        value=$(echo "$prop" | jq -r '.rich_text | map(.plain_text) | join("")') ;;
+    number)           value=$(echo "$prop" | jq -r '.number // ""') ;;
+    select)           value=$(echo "$prop" | jq -r '.select.name // ""') ;;
+    multi_select)     value=$(echo "$prop" | jq -r '[.multi_select[].name] | join(", ")') ;;
+    status)           value=$(echo "$prop" | jq -r '.status.name // ""') ;;
+    date)             value=$(echo "$prop" | jq -r \
+                        'if .date then (.date.start + (if .date.end then " → " + .date.end else "" end)) else "" end') ;;
+    checkbox)         value=$(echo "$prop" | jq -r 'if .checkbox then "✓" else "✗" end') ;;
+    url)              value=$(echo "$prop" | jq -r '.url // ""') ;;
+    email)            value=$(echo "$prop" | jq -r '.email // ""') ;;
+    phone_number)     value=$(echo "$prop" | jq -r '.phone_number // ""') ;;
+    people)           value=$(echo "$prop" | jq -r '[.people[].name // .people[].id] | join(", ")') ;;
+    relation)         value=$(echo "$prop" | jq -r '[.relation[].id] | join(", ")') ;;
+    unique_id)        value=$(echo "$prop" | jq -r '(.unique_id.prefix // "") + (.unique_id.number | tostring)') ;;
+    created_time)     value=$(echo "$prop" | jq -r '.created_time // ""') ;;
+    last_edited_time) value=$(echo "$prop" | jq -r '.last_edited_time // ""') ;;
+    created_by)       value=$(echo "$prop" | jq -r '.created_by.name // .created_by.id // ""') ;;
+    last_edited_by)   value=$(echo "$prop" | jq -r '.last_edited_by.name // .last_edited_by.id // ""') ;;
+    files)            value=$(echo "$prop" | jq -r '[.files[].name] | join(", ")') ;;
+    *)                value="[type: $type]" ;;
+  esac
 
-  echo ""
-  echo "$users_json" | jq -r '.results[] |
-    [
-      (.name // "" | split(" ") | .[0] | ascii_downcase | .[0:14]),
-      (if .type == "bot"
-        then "[bot]"
-        else (.person.email // "—")
-       end | .[0:36]),
-      .id
-    ] |
-    @tsv' | \
-  while IFS=$'\t' read -r handle email uid; do
-    printf "  \033[1m%-14s\033[0m  \033[2m%-36s\033[0m  %s\n" "$handle" "$email" "$uid"
-  done
-  echo ""
+  printf "  \033[1m%-25s\033[0m %s\n" "${name}:" "$value"
 }
 
 # ---------------------------------------------------------------------------
-# cmd: assign <No.> <handle[,handle,...]> — set assignees (replaces all)
+# noun: task
 # ---------------------------------------------------------------------------
-cmd_assign() {
-  local no="$1"
-  local handles_input="$2"
 
-  if [[ -z "$handles_input" ]]; then
-    die "Usage: notion assign <No.> <handle[,handle,...]>"
-  fi
-
-  info "Resolving emails..."
-  resolve_emails "$handles_input"
-  local people_array="$_RESOLVED_PEOPLE"
-
-  info "Fetching task No. ${no}..."
-  local page_id
-  page_id=$(resolve_page_id "$no")
-
-  # Find the people property name on this page (prefer "Assigned To", fall back to first people prop)
-  local page
-  page=$(notion_get "/pages/${page_id}")
-  local prop_name
-  prop_name=$(echo "$page" | jq -r '
-    .properties | to_entries[]
-    | select(.value.type == "people")
-    | .key
-  ' | head -1)
-
-  if [[ -z "$prop_name" ]]; then
-    die "No 'people' property found on task No. ${no}."
-  fi
-
-  local body
-  body=$(jq -n \
-    --arg p "$prop_name" \
-    --argjson arr "$people_array" \
-    '{properties: {($p): {people: $arr}}}')
-
-  notion_patch "/pages/${page_id}" "$body" > /dev/null
-  local display
-  display=$(echo "$people_array" | jq -r '[.[].id] | join(", ")')
-  green "✓ Assigned '${prop_name}' on task No. ${no} → ${handles_input}"
-}
-
-# ---------------------------------------------------------------------------
-# cmd: unassign <No.> <handle[,handle,...]> — remove specific assignees
-# ---------------------------------------------------------------------------
-cmd_unassign() {
-  local no="$1"
-  local handles_input="$2"
-
-  if [[ -z "$handles_input" ]]; then
-    die "Usage: notion unassign <No.> <handle[,handle,...]>"
-  fi
-
-  info "Fetching task No. ${no}..."
-  local page_id
-  page_id=$(resolve_page_id "$no")
-
-  local page
-  page=$(notion_get "/pages/${page_id}")
-
-  local prop_name
-  prop_name=$(echo "$page" | jq -r '
-    .properties | to_entries[]
-    | select(.value.type == "people")
-    | .key
-  ' | head -1)
-
-  if [[ -z "$prop_name" ]]; then
-    die "No 'people' property found on task No. ${no}."
-  fi
-
-  # Fetch users to resolve emails → IDs
-  local users_json
-  users_json=$(notion_get "/users")
-
-  # Build set of IDs to remove
-  local remove_ids="[]"
-  IFS=',' read -ra raw_inputs <<< "$handles_input"
-  for raw in "${raw_inputs[@]}"; do
-    local email
-    email="${raw#"${raw%%[![:space:]]*}"}"
-    email="${email%"${email##*[![:space:]]}"}"
-    email="${email,,}"
-
-    local uid
-    uid=$(echo "$users_json" | jq -r --arg e "$email" '
-      .results[]
-      | select(.type == "person")
-      | select((.person.email | ascii_downcase) == $e)
-      | .id
-    ' | head -1)
-
-    if [[ -z "$uid" ]]; then
-      local valid
-      valid=$(echo "$users_json" | jq -r \
-        '[.results[] | select(.type=="person") | .person.email | ascii_downcase] | sort | join(", ")')
-      die "Unknown email '${email}'. Valid emails: ${valid}"
-    fi
-
-    # Check if this person is currently assigned
-    local currently_assigned
-    currently_assigned=$(echo "$page" | jq -r \
-      --arg p "$prop_name" --arg id "$uid" \
-      '.properties[$p].people[]? | select(.id == $id) | .id')
-
-    if [[ -z "$currently_assigned" ]]; then
-      yellow "Warning: '${handle}' is not currently assigned to task No. ${no}, skipping."
-      continue
-    fi
-
-    remove_ids=$(echo "$remove_ids" | jq --arg id "$uid" '. + [$id]')
-  done
-
-  # Build new assignees array: current minus removed
-  local new_people
-  new_people=$(echo "$page" | jq \
-    --arg p "$prop_name" \
-    --argjson rm "$remove_ids" \
-    '.properties[$p].people | map(select(.id as $id | $rm | index($id) == null)) | map({object:"user",id:.id})')
-
-  local body
-  body=$(jq -n \
-    --arg p "$prop_name" \
-    --argjson arr "$new_people" \
-    '{properties: {($p): {people: $arr}}}')
-
-  notion_patch "/pages/${page_id}" "$body" > /dev/null
-  green "✓ Unassigned [${handles_input}] from task No. ${no}"
-}
-
-# ---------------------------------------------------------------------------
-# cmd: tasks list — grouped by Stage
-# ---------------------------------------------------------------------------
-cmd_tasks_list() {
+cmd_task_list() {
   local filter_prop="" filter_val="" sort_prop="" sort_dir="ascending"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --filter) filter_prop="$2"; filter_val="$3"; shift; shift; shift ;;
+      --filter) filter_prop="$2"; filter_val="$3"; shift 3 ;;
       --sort)
-        sort_prop="$2"; shift; shift
+        sort_prop="$2"; shift 2
         if [[ $# -gt 0 && "$1" =~ ^(asc|desc|ascending|descending)$ ]]; then
           sort_dir="$1"; shift
         fi
@@ -511,78 +337,53 @@ cmd_tasks_list() {
   local body="{}"
 
   if [[ -n "$filter_prop" && -n "$filter_val" ]]; then
-    # Detect property type from the database schema to pick the right filter shape
-    local schema
+    local schema prop_type real_prop_name
     schema=$(notion_get "/databases/${NOTION_DATABASE_ID}")
 
-    local prop_type_for_filter=""
-    prop_type_for_filter=$(echo "$schema" | jq -r --arg p "$filter_prop" '
+    prop_type=$(echo "$schema" | jq -r --arg p "$filter_prop" '
       .properties | to_entries[]
       | select((.key | ascii_downcase) == ($p | ascii_downcase))
       | .value.type
     ' | head -1)
 
-    if [[ "$prop_type_for_filter" == "people" ]]; then
-      # Resolve handle → user ID, then use people filter
-      info "Resolving handle '${filter_val}' for people filter..."
-      local uid
-      uid=$(resolve_handle_to_id "$filter_val")
-      local real_prop_name
-      real_prop_name=$(echo "$schema" | jq -r --arg p "$filter_prop" '
-        .properties | to_entries[]
-        | select((.key | ascii_downcase) == ($p | ascii_downcase))
-        | .key
-      ' | head -1)
-      body=$(jq -n \
-        --arg prop "${real_prop_name:-$filter_prop}" \
-        --arg uid "$uid" \
-        '{filter: {property: $prop, people: {contains: $uid}}}')
+    real_prop_name=$(echo "$schema" | jq -r --arg p "$filter_prop" '
+      .properties | to_entries[]
+      | select((.key | ascii_downcase) == ($p | ascii_downcase))
+      | .key
+    ' | head -1)
 
-    elif [[ "$prop_type_for_filter" == "created_by" ]]; then
-      # Resolve handle → user ID, use created_by filter
-      info "Resolving handle '${filter_val}' for created_by filter..."
-      local uid
-      uid=$(resolve_handle_to_id "$filter_val")
-      local real_prop_name
-      real_prop_name=$(echo "$schema" | jq -r --arg p "$filter_prop" '
-        .properties | to_entries[]
-        | select((.key | ascii_downcase) == ($p | ascii_downcase))
-        | .key
-      ' | head -1)
-      body=$(jq -n \
-        --arg prop "${real_prop_name:-$filter_prop}" \
-        --arg uid "$uid" \
-        '{filter: {property: $prop, created_by: {contains: $uid}}}')
-
-    else
-      # Default: OR across common text/select/status/multi_select types
-      body=$(jq -n \
-        --arg prop "$filter_prop" \
-        --arg val "$filter_val" \
-        '{filter: {or: [
-            {property: $prop, rich_text:    {contains: $val}},
-            {property: $prop, select:       {equals:   $val}},
-            {property: $prop, status:       {equals:   $val}},
-            {property: $prop, multi_select: {contains: $val}}
-          ]}}')
-    fi
+    case "$prop_type" in
+      people)
+        info "Resolving '${filter_val}' for people filter..."
+        local uid; uid=$(resolve_user_id "$filter_val")
+        body=$(jq -n --arg prop "${real_prop_name:-$filter_prop}" --arg uid "$uid" \
+          '{filter: {property: $prop, people: {contains: $uid}}}') ;;
+      created_by)
+        info "Resolving '${filter_val}' for created_by filter..."
+        local uid; uid=$(resolve_user_id "$filter_val")
+        body=$(jq -n --arg prop "${real_prop_name:-$filter_prop}" --arg uid "$uid" \
+          '{filter: {property: $prop, created_by: {contains: $uid}}}') ;;
+      *)
+        body=$(jq -n --arg prop "$filter_prop" --arg val "$filter_val" \
+          '{filter: {or: [
+              {property: $prop, rich_text:    {contains: $val}},
+              {property: $prop, select:       {equals:   $val}},
+              {property: $prop, status:       {equals:   $val}},
+              {property: $prop, multi_select: {contains: $val}}
+            ]}}') ;;
+    esac
   fi
 
   if [[ -n "$sort_prop" ]]; then
-    body=$(echo "$body" | jq \
-      --arg prop "$sort_prop" \
-      --arg dir "$sort_dir" \
+    body=$(echo "$body" | jq --arg prop "$sort_prop" --arg dir "$sort_dir" \
       '. + {sorts: [{property: $prop, direction: $dir}]}')
   else
-    # default: sort by last edited, most recent first
     body=$(echo "$body" | jq '. + {sorts: [{timestamp: "last_edited_time", direction: "descending"}]}')
   fi
 
   info "Fetching tasks..."
-  local result
+  local result count
   result=$(notion_post "/databases/${NOTION_DATABASE_ID}/query" "$body")
-
-  local count
   count=$(echo "$result" | jq '.results | length')
 
   if [[ "$count" -eq 0 ]]; then
@@ -590,10 +391,9 @@ cmd_tasks_list() {
     return
   fi
 
-  # Collect unique group-by values
   local statuses
   statuses=$(echo "$result" | jq -r --arg grp "$NOTION_STATUS_PROPERTY_NAME" '
-    [ .results[].properties
+    [.results[].properties
       | to_entries[]
       | select(.key == $grp)
       | .value
@@ -615,7 +415,6 @@ cmd_tasks_list() {
     return
   fi
 
-  # Print each stage group
   while IFS= read -r status; do
     [[ -z "$status" ]] && continue
     local group
@@ -640,7 +439,6 @@ cmd_tasks_list() {
     fi
   done <<< "$statuses"
 
-  # Tasks with no group-by value set
   local no_stage
   no_stage=$(echo "$result" | jq -r --arg grp "$NOTION_STATUS_PROPERTY_NAME" '
     .results[]
@@ -667,17 +465,12 @@ cmd_tasks_list() {
   dim "Total: $count tasks"
 }
 
-# ---------------------------------------------------------------------------
-# cmd: tasks <No.> — show details + comments
-# ---------------------------------------------------------------------------
-cmd_task_detail() {
+cmd_task_show() {
   local no="$1"
   info "Fetching task No. ${no}..."
 
-  local page_id
+  local page_id page
   page_id=$(resolve_page_id "$no")
-
-  local page
   page=$(notion_get "/pages/${page_id}")
 
   echo ""
@@ -701,9 +494,8 @@ cmd_task_detail() {
 
   echo ""
   bold "Comments:"
-  local comments
+  local comments comment_count
   comments=$(notion_get "/comments?block_id=${page_id}")
-  local comment_count
   comment_count=$(echo "$comments" | jq '.results | length')
 
   if [[ "$comment_count" -eq 0 ]]; then
@@ -717,196 +509,26 @@ cmd_task_detail() {
   echo ""
 }
 
-# ---------------------------------------------------------------------------
-# cmd: comment <No.> "text"
-# ---------------------------------------------------------------------------
-cmd_add_comment() {
-  local no="$1"
-  local text="$2"
-  if [[ -z "$text" ]]; then
-    die "Comment text cannot be empty."
-  fi
-
-  info "Fetching task No. ${no}..."
-  local page_id
-  page_id=$(resolve_page_id "$no")
-
-  # Convert a lightweight markdown string into a Notion rich_text array.
-  #
-  # Supported inline syntax:
-  #   **text**        → bold
-  #   **`text`**      → bold + code
-  #   _text_          → italic (word-boundary aware; underscores inside identifiers ignored)
-  #   *text*          → italic
-  #   `text`          → inline code
-  #   ~~text~~        → strikethrough
-  #   [label](url)    → markdown link
-  #   https://...     → clickable link (auto-detected in plain text)
-  local rich_text_json
-  rich_text_json=$(python3 -c "
-import re, json, sys
-
-def parse(text):
-    token_re = re.compile(
-        r'\*\*(\`?)(.+?)\1\*\*'                    # **text** bold (or **\`text\`** bold+code)
-        r'|~~(.+?)~~'                               # ~~text~~ strikethrough
-        r'|(?<!\w)_(.+?)_(?!\w)'                   # _text_ italic (word-boundary protected)
-        r'|\*([^\*\s][^\*]*?[^\*\s]|[^\*\s])\*'   # *text* italic
-        r'|\`([^\`]+)\`'                            # \`text\` code
-        r'|\[([^\]]+)\]\((https?://[^\)]+)\)'       # [label](url) markdown link
-        r'|(https?://\S+)'                          # bare URL
-        r'|([^\*\`~\[]+)'                           # plain text
-        r'|(.)'                                     # catch-all single char
-    )
-
-    ann_plain = {'bold': False, 'italic': False, 'code': False,
-                 'strikethrough': False, 'underline': False, 'color': 'default'}
-    segments = []
-
-    for m in token_re.finditer(text):
-        bold_tick, bold_content, strike, u_italic, star_italic, \
-            code, md_label, md_url, url, plain, catch = m.groups()
-
-        if bold_content is not None:
-            segments.append({'type': 'text', 'text': {'content': bold_content},
-                'annotations': {**ann_plain, 'bold': True, 'code': bool(bold_tick)}})
-
-        elif strike is not None:
-            segments.append({'type': 'text', 'text': {'content': strike},
-                'annotations': {**ann_plain, 'strikethrough': True}})
-
-        elif u_italic is not None or star_italic is not None:
-            segments.append({'type': 'text', 'text': {'content': u_italic or star_italic},
-                'annotations': {**ann_plain, 'italic': True}})
-
-        elif code is not None:
-            segments.append({'type': 'text', 'text': {'content': code},
-                'annotations': {**ann_plain, 'code': True}})
-
-        elif md_label is not None and md_url is not None:
-            segments.append({'type': 'text',
-                'text': {'content': md_label, 'link': {'url': md_url}},
-                'annotations': {**ann_plain}})
-
-        elif url is not None:
-            segments.append({'type': 'text',
-                'text': {'content': url, 'link': {'url': url}},
-                'annotations': {**ann_plain}})
-
-        elif plain is not None or catch is not None:
-            chunk = plain if plain is not None else catch
-            url_re = re.compile(r'(https?://\S+)')
-            for part in url_re.split(chunk):
-                if not part:
-                    continue
-                is_url = bool(url_re.fullmatch(part))
-                segments.append({'type': 'text',
-                    'text': {'content': part, **(({'link': {'url': part}}) if is_url else {})},
-                    'annotations': {**ann_plain}})
-
-    return segments
-
-print(json.dumps(parse(sys.argv[1])))
-" "$text")
-
-  local body
-  body=$(jq -n \
-    --arg pid "$page_id" \
-    --argjson rt "$rich_text_json" \
-    '{parent: {page_id: $pid}, rich_text: $rt}')
-
-  local result
-  result=$(notion_post "/comments" "$body")
-  local cid
-  cid=$(echo "$result" | jq -r '.id')
-  green "✓ Comment added to task No. ${no} (id: ${cid})"
-}
-
-# ---------------------------------------------------------------------------
-# cmd: update <No.> <property> <value>
-# ---------------------------------------------------------------------------
-cmd_update() {
-  local no="$1"
-  local prop="$2"
-  local value="$3"
-
-  info "Fetching task No. ${no}..."
-  local page_id
-  page_id=$(resolve_page_id "$no")
-
-  local page
-  page=$(notion_get "/pages/${page_id}")
-
-  # Case-insensitive property name match
-  local real_prop
-  real_prop=$(echo "$page" | jq -r --arg p "$prop" '
-    .properties | to_entries[]
-    | select((.key | ascii_downcase) == ($p | ascii_downcase))
-    | .key
-  ' | head -1)
-
-  if [[ -z "$real_prop" ]]; then
-    die "Property '${prop}' not found on task No. ${no}."
-  fi
-
-  local prop_type
-  prop_type=$(echo "$page" | jq -r --arg p "$real_prop" '.properties[$p].type')
-
-  local prop_body
-  case "$prop_type" in
-    title)        prop_body=$(jq -n --arg v "$value" '{title:     [{type:"text",text:{content:$v}}]}') ;;
-    rich_text)    prop_body=$(jq -n --arg v "$value" '{rich_text: [{type:"text",text:{content:$v}}]}') ;;
-    select)       prop_body=$(jq -n --arg v "$value" '{select:       {name:$v}}') ;;
-    status)       prop_body=$(jq -n --arg v "$value" '{status:       {name:$v}}') ;;
-    multi_select) prop_body=$(jq -n --arg v "$value" '{multi_select: ($v | split(",") | map(ltrimstr(" ") | rtrimstr(" ")) | map({name:.}))}') ;;
-    number)       prop_body=$(jq -n --argjson v "$value" '{number: $v}') ;;
-    checkbox)
-      local bv="false"
-      if [[ "$value" == "true" || "$value" == "1" || "$value" == "yes" ]]; then bv="true"; fi
-      prop_body=$(jq -n --argjson v "$bv" '{checkbox: $v}') ;;
-    url)          prop_body=$(jq -n --arg v "$value" '{url:          $v}') ;;
-    email)        prop_body=$(jq -n --arg v "$value" '{email:        $v}') ;;
-    phone_number) prop_body=$(jq -n --arg v "$value" '{phone_number: $v}') ;;
-    date)         prop_body=$(jq -n --arg v "$value" '{date: {start: $v}}') ;;
-    people)
-      resolve_emails "$value"
-      local people_arr="$_RESOLVED_PEOPLE"
-      prop_body=$(jq -n --argjson arr "$people_arr" '{people: $arr}') ;;
-    *)            die "Property type '${prop_type}' is not supported for update via CLI." ;;
-  esac
-
-  local body
-  body=$(jq -n --arg p "$real_prop" --argjson pb "$prop_body" '{properties: {($p): $pb}}')
-
-  notion_patch "/pages/${page_id}" "$body" > /dev/null
-  green "✓ Updated '${real_prop}' on task No. ${no} → ${value}"
-}
-
-# ---------------------------------------------------------------------------
-# cmd: create --title "..." [--<prop> <val> ...]
-# ---------------------------------------------------------------------------
-cmd_create() {
+cmd_task_create() {
   local title=""
   declare -A extra_props=()
-  extra_props=()  # ensure initialised under set -u
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --title) title="$2"; shift; shift ;;
+      --title) title="$2"; shift 2 ;;
       --*)
         local key="${1#--}"
         extra_props["$key"]="$2"
-        shift; shift ;;
+        shift 2 ;;
       *) die "Unknown argument: $1" ;;
     esac
   done
 
-  if [[ -z "$title" ]]; then
-    die "You must provide --title \"...\" to create a task."
-  fi
+  [[ -z "$title" ]] && die "You must provide --title \"...\" to create a task."
 
   local props
-  props=$(jq -n --arg t "$title" --arg tprop "$NOTION_TITLE_PROPERTY_NAME" '{($tprop): {title: [{type:"text",text:{content:$t}}]}}')
+  props=$(jq -n --arg t "$title" --arg tprop "$NOTION_TITLE_PROPERTY_NAME" \
+    '{($tprop): {title: [{type:"text",text:{content:$t}}]}}')
 
   if [[ ${#extra_props[@]} -gt 0 ]]; then
     local schema
@@ -915,7 +537,7 @@ cmd_create() {
     for key in "${!extra_props[@]}"; do
       local val="${extra_props[$key]}"
 
-      local real_key
+      local real_key ptype
       real_key=$(echo "$schema" | jq -r --arg k "$key" '
         .properties | to_entries[]
         | select((.key | ascii_downcase) == ($k | ascii_downcase))
@@ -927,216 +549,368 @@ cmd_create() {
         continue
       fi
 
-      local ptype
       ptype=$(echo "$schema" | jq -r --arg k "$real_key" '.properties[$k].type')
 
       local patch
-      case "$ptype" in
-        rich_text)    patch=$(jq -n --arg v "$val" '{rich_text: [{type:"text",text:{content:$v}}]}') ;;
-        select)       patch=$(jq -n --arg v "$val" '{select: {name:$v}}') ;;
-        status)       patch=$(jq -n --arg v "$val" '{status: {name:$v}}') ;;
-        multi_select) patch=$(jq -n --arg v "$val" '{multi_select: ($v | split(",") | map(ltrimstr(" ") | rtrimstr(" ")) | map({name:.}))}') ;;
-        number)       patch=$(jq -n --argjson v "$val" '{number: $v}') ;;
-        checkbox)
-          local bv="false"
-          if [[ "$val" == "true" || "$val" == "1" ]]; then bv="true"; fi
-          patch=$(jq -n --argjson v "$bv" '{checkbox: $v}') ;;
-        url)          patch=$(jq -n --arg v "$val" '{url: $v}') ;;
-        date)         patch=$(jq -n --arg v "$val" '{date: {start:$v}}') ;;
-        *)            yellow "Warning: type '$ptype' for '$key' not supported, skipping."; continue ;;
-      esac
+      patch=$(build_prop_body "$ptype" "$val") || continue
       props=$(echo "$props" | jq --arg k "$real_key" --argjson p "$patch" '.[$k] = $p')
     done
   fi
 
-  local body
-  body=$(jq -n \
-    --arg db "$NOTION_DATABASE_ID" \
-    --argjson props "$props" \
+  local body result new_id url
+  body=$(jq -n --arg db "$NOTION_DATABASE_ID" --argjson props "$props" \
     '{parent: {database_id: $db}, properties: $props}')
 
-  local result
   result=$(notion_post "/pages" "$body")
 
-  local new_id
   new_id=$(echo "$result" | jq -r '
     .properties | to_entries[]
     | select(.value.type=="unique_id")
     | .value.unique_id.number | tostring
   ')
-  local url
   url=$(echo "$result" | jq -r '.url')
 
   green "✓ Task created!"
-  if [[ -n "$new_id" ]]; then echo "  No.  : $new_id"; fi
+  [[ -n "$new_id" ]] && echo "  No.  : $new_id"
   echo "  URL  : $url"
 }
 
+cmd_task_update() {
+  local no="$1" prop="$2" value="$3"
+
+  info "Fetching task No. ${no}..."
+  local page_id page
+  page_id=$(resolve_page_id "$no")
+  page=$(notion_get "/pages/${page_id}")
+
+  local real_prop
+  real_prop=$(echo "$page" | jq -r --arg p "$prop" '
+    .properties | to_entries[]
+    | select((.key | ascii_downcase) == ($p | ascii_downcase))
+    | .key
+  ' | head -1)
+  [[ -z "$real_prop" ]] && die "Property '${prop}' not found on task No. ${no}."
+
+  local prop_type prop_body body
+  prop_type=$(echo "$page" | jq -r --arg p "$real_prop" '.properties[$p].type')
+  prop_body=$(build_prop_body "$prop_type" "$value")
+
+  body=$(jq -n --arg p "$real_prop" --argjson pb "$prop_body" '{properties: {($p): $pb}}')
+  notion_patch "/pages/${page_id}" "$body" > /dev/null
+  green "✓ Updated '${real_prop}' on task No. ${no} → ${value}"
+}
+
+cmd_task_assign() {
+  local no="$1" handles_input="$2"
+  [[ -z "$handles_input" ]] && die "Usage: notion task assign <No.> <email[,email,...]>"
+
+  info "Resolving emails..."
+  resolve_user_ids "$handles_input"
+  local people_array="$_RESOLVED_PEOPLE"
+
+  info "Fetching task No. ${no}..."
+  local page_id page prop_name
+  page_id=$(resolve_page_id "$no")
+  page=$(notion_get "/pages/${page_id}")
+
+  prop_name=$(echo "$page" | jq -r '
+    .properties | to_entries[] | select(.value.type == "people") | .key
+  ' | head -1)
+  [[ -z "$prop_name" ]] && die "No 'people' property found on task No. ${no}."
+
+  local body
+  body=$(jq -n --arg p "$prop_name" --argjson arr "$people_array" \
+    '{properties: {($p): {people: $arr}}}')
+
+  notion_patch "/pages/${page_id}" "$body" > /dev/null
+  green "✓ Assigned '${prop_name}' on task No. ${no} → ${handles_input}"
+}
+
+cmd_task_unassign() {
+  local no="$1" handles_input="$2"
+  [[ -z "$handles_input" ]] && die "Usage: notion task unassign <No.> <email[,email,...]>"
+
+  info "Fetching task No. ${no}..."
+  local page_id page prop_name
+  page_id=$(resolve_page_id "$no")
+  page=$(notion_get "/pages/${page_id}")
+
+  prop_name=$(echo "$page" | jq -r '
+    .properties | to_entries[] | select(.value.type == "people") | .key
+  ' | head -1)
+  [[ -z "$prop_name" ]] && die "No 'people' property found on task No. ${no}."
+
+  # Build set of IDs to remove
+  local remove_ids="[]"
+  IFS=',' read -ra raw_inputs <<< "$handles_input"
+  for raw in "${raw_inputs[@]}"; do
+    local email uid
+    email="${raw#"${raw%%[![:space:]]*}"}"
+    email="${email%"${email##*[![:space:]]}"}"
+
+    uid=$(resolve_user_id "$email")
+
+    local currently_assigned
+    currently_assigned=$(echo "$page" | jq -r \
+      --arg p "$prop_name" --arg id "$uid" \
+      '.properties[$p].people[]? | select(.id == $id) | .id')
+
+    if [[ -z "$currently_assigned" ]]; then
+      yellow "Warning: '${email}' is not currently assigned to task No. ${no}, skipping."
+      continue
+    fi
+
+    remove_ids=$(echo "$remove_ids" | jq --arg id "$uid" '. + [$id]')
+  done
+
+  local new_people body
+  new_people=$(echo "$page" | jq \
+    --arg p "$prop_name" \
+    --argjson rm "$remove_ids" \
+    '.properties[$p].people | map(select(.id as $id | $rm | index($id) == null)) | map({object:"user",id:.id})')
+
+  body=$(jq -n --arg p "$prop_name" --argjson arr "$new_people" \
+    '{properties: {($p): {people: $arr}}}')
+
+  notion_patch "/pages/${page_id}" "$body" > /dev/null
+  green "✓ Unassigned [${handles_input}] from task No. ${no}"
+}
+
 # ---------------------------------------------------------------------------
-# cmd: bootstrap — provision the database with standard task management properties
+# noun: comment
 # ---------------------------------------------------------------------------
-cmd_bootstrap() {
+
+cmd_comment_add() {
+  local no="$1" text="$2"
+  [[ -z "$text" ]] && die "Comment text cannot be empty."
+
+  info "Fetching task No. ${no}..."
+  local page_id
+  page_id=$(resolve_page_id "$no")
+
+  local rich_text_json
+  rich_text_json=$(python3 -c "
+import re, json, sys
+
+def parse(text):
+    token_re = re.compile(
+        r'\*\*(\`?)(.+?)\1\*\*'
+        r'|~~(.+?)~~'
+        r'|(?<!\w)_(.+?)_(?!\w)'
+        r'|\*([^\*\s][^\*]*?[^\*\s]|[^\*\s])\*'
+        r'|\`([^\`]+)\`'
+        r'|\[([^\]]+)\]\((https?://[^\)]+)\)'
+        r'|(https?://\S+)'
+        r'|([^\*\`~\[]+)'
+        r'|(.)'
+    )
+    ann = {'bold': False, 'italic': False, 'code': False,
+           'strikethrough': False, 'underline': False, 'color': 'default'}
+    segments = []
+    for m in token_re.finditer(text):
+        bold_tick, bold_content, strike, u_italic, star_italic, \
+            code, md_label, md_url, url, plain, catch = m.groups()
+        if bold_content is not None:
+            segments.append({'type': 'text', 'text': {'content': bold_content},
+                'annotations': {**ann, 'bold': True, 'code': bool(bold_tick)}})
+        elif strike is not None:
+            segments.append({'type': 'text', 'text': {'content': strike},
+                'annotations': {**ann, 'strikethrough': True}})
+        elif u_italic is not None or star_italic is not None:
+            segments.append({'type': 'text', 'text': {'content': u_italic or star_italic},
+                'annotations': {**ann, 'italic': True}})
+        elif code is not None:
+            segments.append({'type': 'text', 'text': {'content': code},
+                'annotations': {**ann, 'code': True}})
+        elif md_label is not None and md_url is not None:
+            segments.append({'type': 'text',
+                'text': {'content': md_label, 'link': {'url': md_url}},
+                'annotations': {**ann}})
+        elif url is not None:
+            segments.append({'type': 'text',
+                'text': {'content': url, 'link': {'url': url}},
+                'annotations': {**ann}})
+        elif plain is not None or catch is not None:
+            chunk = plain if plain is not None else catch
+            url_re = re.compile(r'(https?://\S+)')
+            for part in url_re.split(chunk):
+                if not part: continue
+                is_url = bool(url_re.fullmatch(part))
+                segments.append({'type': 'text',
+                    'text': {'content': part, **(({'link': {'url': part}}) if is_url else {})},
+                    'annotations': {**ann}})
+    return segments
+
+print(json.dumps(parse(sys.argv[1])))
+" "$text")
+
+  local body result cid
+  body=$(jq -n --arg pid "$page_id" --argjson rt "$rich_text_json" \
+    '{parent: {page_id: $pid}, rich_text: $rt}')
+
+  result=$(notion_post "/comments" "$body")
+  cid=$(echo "$result" | jq -r '.id')
+  green "✓ Comment added to task No. ${no} (id: ${cid})"
+}
+
+# ---------------------------------------------------------------------------
+# noun: user
+# ---------------------------------------------------------------------------
+
+cmd_user_list() {
+  info "Fetching workspace members..."
+  local users_json
+  users_json=$(_fetch_users)
+
+  echo ""
+  echo "$users_json" | jq -r '.results[] |
+    [
+      (.name // "" | split(" ") | .[0] | ascii_downcase | .[0:14]),
+      (if .type == "bot" then "[bot]" else (.person.email // "—") end | .[0:36]),
+      .id
+    ] | @tsv' | \
+  while IFS=$'\t' read -r handle email uid; do
+    printf "  \033[1m%-14s\033[0m  \033[2m%-36s\033[0m  %s\n" "$handle" "$email" "$uid"
+  done
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
+# noun: db
+# ---------------------------------------------------------------------------
+
+cmd_db_list() {
+  echo ""
+  bold "Available databases"
+  echo ""
+  if [[ -n "$NOTION_DATABASE_ID" ]]; then
+    printf "  \033[1m%-20s\033[0m %s\n" "(default)" "$NOTION_DATABASE_ID"
+  fi
+  for _alias in $(echo "${!_NOTION_DB_ALIASES[@]}" | tr ' ' '\n' | sort); do
+    printf "  \033[1m%-20s\033[0m %s\n" "$_alias" "${_NOTION_DB_ALIASES[$_alias]}"
+  done
+  if [[ ${#_NOTION_DB_ALIASES[@]} -eq 0 && -z "$NOTION_DATABASE_ID" ]]; then
+    yellow "  No databases configured. Add entries to .env.notion."
+  elif [[ ${#_NOTION_DB_ALIASES[@]} -eq 0 ]]; then
+    dim "  No aliases defined."
+  fi
+  echo ""
+  dim "  Define aliases in .env.notion:"
+  dim "    NOTION_DATABASE_ID=<uuid>                  # default"
+  dim "    NOTION_DATABASE_ID:VENTURES=<uuid>          # notion --db ventures"
+  dim "    NOTION_DATABASE_ID:CLIENTS=<uuid>           # notion --db clients"
+  echo ""
+  dim "Usage: notion --db <alias> task list"
+  dim "       notion --db <uuid>  task list"
+  echo ""
+}
+
+cmd_db_bootstrap() {
   info "Bootstrapping database ${NOTION_DATABASE_ID}..."
 
-  # -------------------------------------------------------------------
-  # Template: properties to create/update on the database
-  # PATCH /databases merges, so existing properties are preserved.
-  # -------------------------------------------------------------------
   local props
   props=$(jq -n '{
-    "ID": {
-      "unique_id": {
-        "prefix": null
-      }
-    },
+    "ID":           {"unique_id": {"prefix": null}},
     "Status": {
       "status": {
         "options": [
-          {"name": "Triage"},
-          {"name": "Backlog"},
-          {"name": "Up Next"},
-          {"name": "In Progress"},
-          {"name": "In Review"},
-          {"name": "In QA"},
-          {"name": "Ready to Deploy"},
-          {"name": "UAT"},
-          {"name": "Completed"},
-          {"name": "Cancelled"}
+          {"name": "Triage"}, {"name": "Backlog"}, {"name": "Up Next"},
+          {"name": "In Progress"}, {"name": "In Review"}, {"name": "In QA"},
+          {"name": "Ready to Deploy"}, {"name": "UAT"},
+          {"name": "Completed"}, {"name": "Cancelled"}
         ],
         "groups": [
-          {
-            "name": "Not started",
-            "color": "gray",
-            "option_ids": []
-          },
-          {
-            "name": "In progress",
-            "color": "blue",
-            "option_ids": []
-          },
-          {
-            "name": "Complete",
-            "color": "green",
-            "option_ids": []
-          }
+          {"name": "Not started", "color": "gray",  "option_ids": []},
+          {"name": "In progress", "color": "blue",  "option_ids": []},
+          {"name": "Complete",    "color": "green", "option_ids": []}
         ]
       }
     },
     "Priority": {
-      "select": {
-        "options": [
-          {"name": "Critical"},
-          {"name": "High"},
-          {"name": "Medium"},
-          {"name": "Low"}
-        ]
-      }
+      "select": {"options": [
+        {"name": "Critical"}, {"name": "High"}, {"name": "Medium"}, {"name": "Low"}
+      ]}
     },
-    "Assignee": {
-      "people": {}
-    },
-    "Due Date": {
-      "date": {}
-    },
+    "Assignee":     {"people": {}},
+    "Due Date":     {"date": {}},
     "Tags": {
-      "multi_select": {
-        "options": [
-          {"name": "coding"},
-          {"name": "need info"},
-          {"name": "issue persists"},
-          {"name": "reviewed"},
-          {"name": "on hold"},
-          {"name": "awaiting details"},
-          {"name": "cancelled"},
-          {"name": "has migration"},
-          {"name": "has env change"}
-        ]
-      }
+      "multi_select": {"options": [
+        {"name": "coding"}, {"name": "need info"}, {"name": "issue persists"},
+        {"name": "reviewed"}, {"name": "on hold"}, {"name": "awaiting details"},
+        {"name": "cancelled"}, {"name": "has migration"}, {"name": "has env change"}
+      ]}
     },
-    "Notes": {
-      "rich_text": {}
-    },
-    "URL": {
-      "url": {}
-    },
-    "Effort": {
-      "number": {
-        "format": "number"
-      }
-    },
-    "Git Branch": {
-      "rich_text": {}
-    },
-    "Pull Request": {
-      "url": {}
-    }
+    "Notes":        {"rich_text": {}},
+    "URL":          {"url": {}},
+    "Effort":       {"number": {"format": "number"}},
+    "Git Branch":   {"rich_text": {}},
+    "Pull Request": {"url": {}}
   }')
 
-  local body
+  local body result
   body=$(jq -n --argjson props "$props" '{properties: $props}')
-
-  local result
   result=$(notion_patch "/databases/${NOTION_DATABASE_ID}" "$body")
-
-  local err
-  err=$(echo "$result" | jq -r '.object // ""')
-
-  if [[ "$err" == "error" ]]; then
-    local msg
-    msg=$(echo "$result" | jq -r '.message // "Unknown error"')
-    die "Bootstrap failed: $msg"
-  fi
 
   green "✓ Database bootstrapped successfully!"
   echo ""
   bold "Properties configured:"
   echo "$result" | jq -r '.properties | to_entries[] | "  • \(.key)  [\(.value.type)]"'
   echo ""
-  local clean_id
-  clean_id="${NOTION_DATABASE_ID//-/}"
+  local clean_id="${NOTION_DATABASE_ID//-/}"
   dim "  URL: https://www.notion.so/${clean_id}"
 }
 
-# ---------------------------------------------------------------------------
-# cmd: dbs — list available DB aliases from .env.notion
-# ---------------------------------------------------------------------------
-cmd_dbs() {
+cmd_db_bootstrap_help() {
   echo ""
-  bold "Available databases"
+  bold "notion db bootstrap — Provision a Notion database with a standard task management schema"
   echo ""
-  # Print the default
-  if [[ -n "$NOTION_DATABASE_ID" ]]; then
-    printf "  \033[1m%-20s\033[0m %s\n" "(default)" "$NOTION_DATABASE_ID"
-  fi
-  # Print aliases
-  for _alias in $(echo "${!_NOTION_DB_ALIASES[@]}" | tr ' ' '\n' | sort); do
-    printf "  \033[1m%-20s\033[0m %s\n" "$_alias" "${_NOTION_DB_ALIASES[$_alias]}"
-  done
-  if [[ ${#_NOTION_DB_ALIASES[@]} -eq 0 && -z "$NOTION_DATABASE_ID" ]]; then
-    yellow "  No databases configured. Add entries to .env.notion:"
-  elif [[ ${#_NOTION_DB_ALIASES[@]} -eq 0 ]]; then
-    dim "  No aliases defined."
-  fi
+  bold "USAGE:"
+  echo "  notion db bootstrap"
   echo ""
-  dim "  Define aliases in .env.notion:"
-  dim "    NOTION_DATABASE_ID=<uuid>            # default"
-  dim "    NOTION_DATABASE_ID:VENTURES=<uuid>   # notion --db ventures"
-  dim "    NOTION_DATABASE_ID:CLIENTS=<uuid>    # notion --db clients"
+  bold "WHAT IT DOES:"
+  echo "  Applies a fixed property template to the database set in NOTION_DATABASE_ID."
+  echo "  Uses PATCH /databases — additive only, existing properties are preserved."
   echo ""
-  dim "Usage: notion --db <alias> tasks"
-  dim "       notion --db <uuid>  tasks"
+  bold "PROPERTIES CONFIGURED:"
+  printf "  %-14s %-12s %s\n" "ID"           "unique_id"  "Auto-incrementing task number"
+  printf "  %-14s %-12s %s\n" "Status"       "status"     "Triage · Backlog · Up Next · In Progress · In Review"
+  printf "  %-14s %-12s %s\n" ""             ""           "In QA · Ready to Deploy · UAT · Completed · Cancelled"
+  printf "  %-14s %-12s %s\n" "Priority"     "select"     "Critical · High · Medium · Low"
+  printf "  %-14s %-12s %s\n" "Assignee"     "people"     "Team member(s)"
+  printf "  %-14s %-12s %s\n" "Due Date"     "date"       "Target completion date"
+  printf "  %-14s %-12s %s\n" "Tags"         "multi_select" "has-migration · has-env-change · ..."
+  printf "  %-14s %-12s %s\n" "Notes"        "rich_text"  "Free-form notes"
+  printf "  %-14s %-12s %s\n" "URL"          "url"        "Reference link"
+  printf "  %-14s %-12s %s\n" "Effort"       "number"     "Fibonacci effort points (1 2 3 5 8 13)"
+  printf "  %-14s %-12s %s\n" "Git Branch"   "rich_text"  "Associated git branch name"
+  printf "  %-14s %-12s %s\n" "Pull Request" "url"        "GitHub pull request URL"
+  echo ""
+  bold "PRE-REQUISITES:"
+  echo ""
+  echo "  1. Create an internal integration at https://www.notion.so/profile/integrations"
+  echo "     Set NOTION_API_KEY in .env.notion"
+  echo ""
+  echo "  2. Create a full-page database in Notion"
+  echo "     Copy its ID from the URL: https://app.notion.com/p/<DATABASE_ID>?v=<view_id>"
+  echo "     Set NOTION_DATABASE_ID in .env.notion"
+  echo ""
+  echo "  3. Connect the integration to the database"
+  echo "     Open the database → ··· → Connections → Add connection"
+  echo ""
+  bold "NOTES:"
+  echo "  Safe to re-run — existing options are preserved, new ones are added."
+  echo "  Views (board, table) must be configured manually in Notion."
   echo ""
 }
 
+# ---------------------------------------------------------------------------
+# noun: rules
+# ---------------------------------------------------------------------------
 
 cmd_rules() {
   local rules_file
-  # Look for RULES.md next to this script
   rules_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/RULES.md"
-
-  if [[ ! -f "$rules_file" ]]; then
-    die "RULES.md not found at: ${rules_file}"
-  fi
+  [[ ! -f "$rules_file" ]] && die "RULES.md not found at: ${rules_file}"
 
   echo ""
   bold "══════════════════════════════════════════════════"
@@ -1144,11 +918,9 @@ cmd_rules() {
   bold "══════════════════════════════════════════════════"
   echo ""
 
-  # Print the file; highlight ## section headers and | table rows for readability
   while IFS= read -r line; do
     if [[ "$line" =~ ^##[[:space:]] ]]; then
-      echo ""
-      bold "${line#\# }"
+      echo ""; bold "${line#\# }"
     elif [[ "$line" =~ ^\|.*\| ]]; then
       dim "$line"
     elif [[ "$line" =~ ^\*\* ]]; then
@@ -1163,125 +935,60 @@ cmd_rules() {
   echo ""
 }
 
+# ---------------------------------------------------------------------------
+# noun: workflow
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# cmd: workflow — display dev & ops workflow guide
-# ---------------------------------------------------------------------------
-cmd_workflow() {
-  local script_dir
+cmd_workflow_list() {
+  local script_dir workflows_dir index_file
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  workflows_dir="${script_dir}/workflows"
+  index_file="${workflows_dir}/README.md"
 
-  # Project-specific first (.kiro/steering/workflow.md), then generic fallback
-  local workflow_file=""
-  if [[ -f "${PWD}/.kiro/steering/workflow.md" ]]; then
-    workflow_file="${PWD}/.kiro/steering/workflow.md"
-  elif [[ -f "${script_dir}/WORKFLOW.md" ]]; then
-    workflow_file="${script_dir}/WORKFLOW.md"
-  else
-    die "No workflow file found. Expected .kiro/steering/workflow.md or ${script_dir}/WORKFLOW.md"
-  fi
+  [[ ! -d "$workflows_dir" ]] && die "workflows/ directory not found at: ${workflows_dir}"
+  [[ ! -f "$index_file" ]]    && die "workflows/README.md not found at: ${index_file}"
 
   echo ""
   bold "══════════════════════════════════════════════════"
-  bold " Dev & Ops Workflow"
+  bold " Workflows"
   bold "══════════════════════════════════════════════════"
   echo ""
-
-  # Skip leading front-matter block (--- ... ---)
-  local in_frontmatter=1
-  local fm_opened=0
 
   while IFS= read -r line; do
-    if [[ "$in_frontmatter" -eq 1 ]]; then
-      if [[ "$line" == "---" && "$fm_opened" -eq 0 ]]; then
-        fm_opened=1; continue
-      elif [[ "$line" == "---" && "$fm_opened" -eq 1 ]]; then
-        in_frontmatter=0; continue
-      elif [[ "$fm_opened" -eq 1 ]]; then
-        continue
-      else
-        in_frontmatter=0
-      fi
-    fi
-
     if [[ "$line" =~ ^##[[:space:]] ]]; then
-      echo ""
-      bold "${line}"
+      echo ""; bold "${line}"
     elif [[ "$line" =~ ^\|.*\| ]]; then
+      dim "$line"
+    elif [[ "$line" =~ ^\`\`\` ]]; then
       dim "$line"
     else
       echo "$line"
     fi
-  done < "$workflow_file"
+  done < "$index_file"
 
   echo ""
-  dim "Source: ${workflow_file}"
+  dim "Source: ${index_file}"
   echo ""
 }
 
-# ---------------------------------------------------------------------------
-# cmd: workflows [name] — list all workflows (index) or show a specific one
-# ---------------------------------------------------------------------------
-cmd_workflows() {
-  local script_dir
+cmd_workflow_show() {
+  local name="$1"
+  local script_dir workflows_dir workflow_file
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local workflows_dir="${script_dir}/workflows"
-
-  if [[ ! -d "$workflows_dir" ]]; then
-    die "workflows/ directory not found at: ${workflows_dir}"
-  fi
-
-  local name="${1:-}"
-
-  # No argument — show the index (README.md)
-  if [[ -z "$name" ]]; then
-    local index_file="${workflows_dir}/README.md"
-    if [[ ! -f "$index_file" ]]; then
-      die "workflows/README.md not found at: ${index_file}"
-    fi
-
-    echo ""
-    bold "══════════════════════════════════════════════════"
-    bold " Workflows"
-    bold "══════════════════════════════════════════════════"
-    echo ""
-
-    while IFS= read -r line; do
-      if [[ "$line" =~ ^##[[:space:]] ]]; then
-        echo ""
-        bold "${line}"
-      elif [[ "$line" =~ ^\|.*\| ]]; then
-        dim "$line"
-      elif [[ "$line" =~ ^\`\`\` ]]; then
-        dim "$line"
-      else
-        echo "$line"
-      fi
-    done < "$index_file"
-
-    echo ""
-    dim "Source: ${index_file}"
-    echo ""
-    return
-  fi
-
-  # Argument given — find and display the workflow file
-  local workflow_file="${workflows_dir}/${name}.md"
+  workflows_dir="${script_dir}/workflows"
+  workflow_file="${workflows_dir}/${name}.md"
 
   if [[ ! -f "$workflow_file" ]]; then
-    # List available workflows to help the user
     local available
     available=$(ls "${workflows_dir}"/*.md 2>/dev/null \
-      | xargs -I{} basename {} .md \
-      | grep -v README \
-      | sort \
-      | tr '\n' ' ')
+      | xargs -I{} basename {} .md | grep -v README | sort | tr '\n' ' ')
     die "Workflow '${name}' not found. Available: ${available% }"
   fi
 
-  # Derive a display title from the filename
   local display_title
-  display_title=$(basename "$workflow_file" .md | tr '-' ' ' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')
+  display_title=$(basename "$workflow_file" .md \
+    | tr '-' ' ' \
+    | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')
 
   echo ""
   bold "══════════════════════════════════════════════════"
@@ -1289,33 +996,19 @@ cmd_workflows() {
   bold "══════════════════════════════════════════════════"
   echo ""
 
-  # Skip leading front-matter block (--- ... ---)
-  local in_frontmatter=1
-  local fm_opened=0
-
+  local in_frontmatter=1 fm_opened=0
   while IFS= read -r line; do
     if [[ "$in_frontmatter" -eq 1 ]]; then
-      if [[ "$line" == "---" && "$fm_opened" -eq 0 ]]; then
-        fm_opened=1; continue
-      elif [[ "$line" == "---" && "$fm_opened" -eq 1 ]]; then
-        in_frontmatter=0; continue
-      elif [[ "$fm_opened" -eq 1 ]]; then
-        continue
-      else
-        in_frontmatter=0
+      if   [[ "$line" == "---" && "$fm_opened" -eq 0 ]]; then fm_opened=1; continue
+      elif [[ "$line" == "---" && "$fm_opened" -eq 1 ]]; then in_frontmatter=0; continue
+      elif [[ "$fm_opened" -eq 1 ]];                    then continue
+      else in_frontmatter=0
       fi
     fi
-
-    if [[ "$line" =~ ^#[[:space:]] ]]; then
-      # Top-level heading — skip (already shown in the header)
-      continue
-    elif [[ "$line" =~ ^##[[:space:]] ]]; then
-      echo ""
-      bold "${line}"
-    elif [[ "$line" =~ ^\|.*\| ]]; then
-      dim "$line"
-    else
-      echo "$line"
+    if   [[ "$line" =~ ^#[[:space:]] ]];  then continue  # skip top-level heading (shown in header)
+    elif [[ "$line" =~ ^##[[:space:]] ]]; then echo ""; bold "${line}"
+    elif [[ "$line" =~ ^\|.*\| ]];        then dim "$line"
+    else echo "$line"
     fi
   done < "$workflow_file"
 
@@ -1325,155 +1018,71 @@ cmd_workflows() {
 }
 
 # ---------------------------------------------------------------------------
-# cmd: open <No.>
-# ---------------------------------------------------------------------------
-cmd_open() {
-  local no="$1"
-  info "Fetching task No. ${no}..."
-  local page_id
-  page_id=$(resolve_page_id "$no")
-  local page
-  page=$(notion_get "/pages/${page_id}")
-  echo "$page" | jq -r '.url'
-}
-
-# ---------------------------------------------------------------------------
-# Help — bootstrap subcommand
-# ---------------------------------------------------------------------------
-cmd_bootstrap_help() {
-  echo ""
-  echo -e "\033[1mnotion bootstrap\033[0m — Provision a Notion database with a standard task management schema"
-  echo ""
-  echo -e "\033[1mUSAGE:\033[0m"
-  echo "  ./notion bootstrap"
-  echo ""
-  echo -e "\033[1mWHAT IT DOES:\033[0m"
-  echo "  Applies a fixed property template to the database set in NOTION_DATABASE_ID."
-  echo "  Uses PATCH /databases — additive only, existing properties are preserved."
-  echo ""
-  echo -e "\033[1mPROPERTIES CONFIGURED:\033[0m"
-  echo "  ID          unique_id    Auto-incrementing task number (built-in)"
-  echo "  Name        title        Task title (built-in, rename in Notion UI)"
-  echo "  Status      status       Triage · Backlog · Up Next · In Progress · In Review"
-  echo "                           In QA · Ready to Deploy · UAT · Completed · Cancelled"
-  echo "  Priority    select       Critical · High · Medium · Low"
-  echo "  Assignee    people       Team member(s) responsible"
-  echo "  Due Date    date         Target completion date"
-  echo "  Tags        multi_select issue persists · need info · coding · reviewed · on hold · awaiting details · cancelled"
-  echo "                           has migration · has env change"
-  echo "  Notes       rich_text    Free-form notes"
-  echo "  URL         url          Reference link"
-  echo "  Effort      number       Fibonacci effort points (1 2 3 5 8 13)"
-  echo "  Git Branch  rich_text    Associated git branch name"
-  echo "  Pull Request  url    Github pull request URL"
-  echo ""
-  echo -e "\033[1mPRE-REQUISITES:\033[0m"
-  echo ""
-  echo "  1. Notion connection (internal integration)"
-  echo "     • Go to https://www.notion.so/profile/integrations"
-  echo "     • Create a new internal integration"
-  echo "     • Copy the Internal Integration Secret (starts with ntn_)"
-  echo "     • Set NOTION_API_KEY in .env.notion"
-  echo "     • Ensure the connection has 'Update content' capability enabled"
-  echo ""
-  echo "  2. A Notion database"
-  echo "     • Create an empty full-page database in your workspace"
-  echo "     • Copy its ID from the browser URL:"
-  echo "         https://app.notion.com/p/<DATABASE_ID>?v=<view_id>"
-  echo "     • The DATABASE_ID is the hex string between /p/ and ?v="
-  echo "     • Set NOTION_DATABASE_ID in .env.notion"
-  echo ""
-  echo "  3. Add the connection to the database"
-  echo "     • Open the database in Notion"
-  echo "     • Click ··· (top-right) → Connections → Add connection → select your connection"
-  echo "     • This grants the connection access to read and modify the database"
-  echo "     • Without this step the API returns a 404 even with a valid key and ID"
-  echo ""
-  echo "  4. .env.notion in the current directory"
-  echo "     NOTION_API_KEY=ntn_xxxxxxxxxxxx"
-  echo "     NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  echo "     NOTION_TITLE_PROPERTY_NAME=Name"
-  echo ""
-  echo -e "\033[1mNOTES:\033[0m"
-  echo "  • Safe to re-run — existing options on Status/Tags/Priority are not removed,"
-  echo "    only new ones are added. To reset options, delete the property in Notion first."
-  echo "  • The title property name ('Name') is set at DB creation and cannot be changed"
-  echo "    via the API. Rename it in the Notion UI if needed."
-  echo "  • Views (board, table) must be configured manually in Notion."
-  echo ""
-}
-
-# ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------
+
 cmd_help() {
   echo ""
-  echo -e "\033[1mNotion CLI\033[0m — Manage Notion tasks from the terminal"
+  bold "Notion CLI — Manage Notion tasks from the terminal"
   echo ""
-  echo -e "\033[1mUSAGE:\033[0m"
-  echo "  ./notion [--db <id|alias>] <command> [arguments]"
+  bold "USAGE:"
+  echo "  notion [--db <id|alias>] <resource> <action> [target] [flags]"
   echo ""
-  echo -e "\033[1mOPTIONS:\033[0m"
-  echo "  --db <id|alias>                    Override NOTION_DATABASE_ID for this run"
-  echo "                                     Use a raw UUID or a named alias from .env.notion"
-  echo "                                     Aliases: NOTION_DB_<ALIAS>=<uuid> in .env.notion"
+  bold "OPTIONS:"
+  echo "  --db <id|alias>    Override NOTION_DATABASE_ID for this run"
   echo ""
-  echo -e "\033[1mCOMMANDS:\033[0m"
-  echo "  tasks                              List all tasks grouped by Status"
-  echo "  tasks --filter <prop> <value>      Filter tasks by property value"
-  echo "                                     For 'people'/'created_by' props, <value> is a handle"
-  echo "  tasks --sort <prop> [asc|desc]     Sort task list by property"
-  echo "  tasks <No.>                        Show task details and comments"
-  echo "  comment <No.> \"text\"               Add a comment to a task"
-  echo "  update <No.> <property> <value>    Update a task property"
-  echo "                                     For people props, <value> is handle[,handle,...]"
-  echo "  create --title \"...\" [--prop val]  Create a new task"
-  echo "  open <No.>                         Print the Notion URL for a task"
-  echo "  people                             List all workspace members with handles"
-  echo "  assign <No.> <handle[,handle,...]> Set assignees on a task (replaces all)"
-  echo "  unassign <No.> <handle[,handle,..] Remove specific assignees from a task"
-  echo "  dbs                                List available DB aliases from .env.notion"
-  echo "  bootstrap                          Provision DB with standard task management properties"
-  echo "  rules                              Display workspace best practices"
-  echo "  workflow                           Display dev & ops workflow guide (legacy)"
-  echo "  workflows                          List all available workflows"
-  echo "  workflows <name>                   Show a specific workflow in detail"
-  echo "                                     Names: development, review, testing, deployment,"
-  echo "                                            planning, task-creation, bug-reporting,"
-  echo "                                            hotfix, release, onboarding"
-  echo "  help                               Show this help"
+  bold "TASK:"
+  echo "  notion task list                              List tasks grouped by Status"
+  echo "  notion task list --filter <prop> <value>      Filter by property"
+  echo "  notion task list --sort <prop> [asc|desc]     Sort by property"
+  echo "  notion task show <No.>                        Show task details and comments"
+  echo "  notion task create --title \"...\" [--prop val] Create a new task"
+  echo "  notion task update <No.> <property> <value>   Update a task property"
+  echo "  notion task assign <No.> <email[,email,...]>  Set assignees (replaces all)"
+  echo "  notion task unassign <No.> <email[,email,..]> Remove specific assignees"
   echo ""
-  echo -e "\033[1mEMAIL RESOLUTION:\033[0m"
-  echo "  People commands accept email addresses (matched case-insensitively)."
-  echo "  Run 'notion people' to see all emails and user IDs."
+  bold "COMMENT:"
+  echo "  notion comment add <No.> \"text\"               Add a comment to a task"
   echo ""
-  echo -e "\033[1mENV\033[0m (.env.notion):"
+  bold "USER:"
+  echo "  notion user list                              List workspace members and emails"
+  echo ""
+  bold "DB:"
+  echo "  notion db list                                List DB aliases from .env.notion"
+  echo "  notion db bootstrap                           Provision DB with standard schema"
+  echo "  notion db bootstrap --help                    Show bootstrap details"
+  echo ""
+  bold "REFERENCE:"
+  echo "  notion rules                                  Display workspace best practices"
+  echo "  notion workflow list                          List available workflows"
+  echo "  notion workflow show <name>                   Show a specific workflow"
+  echo "    Names: development, review, testing, deployment, planning,"
+  echo "           task-creation, bug-reporting, hotfix, release, onboarding"
+  echo ""
+  bold "ENV (.env.notion):"
   echo "  NOTION_API_KEY=secret_xxx"
-  echo "  NOTION_DATABASE_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx            # default DB"
-  echo "  NOTION_DATABASE_ID:VENTURES=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # alias: ventures"
-  echo "  NOTION_DATABASE_ID:CLIENTS=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # alias: clients"
+  echo "  NOTION_DATABASE_ID=<uuid>                         # default DB"
+  echo "  NOTION_DATABASE_ID:VENTURES=<uuid>                # alias: --db ventures"
+  echo "  NOTION_DATABASE_ID:CLIENTS=<uuid>                 # alias: --db clients"
+  echo "  NOTION_TITLE_PROPERTY_NAME=Title                  # title prop name (default: Task name)"
   echo ""
-  echo -e "\033[1mEXAMPLES:\033[0m"
-  echo "  ./notion tasks"
-  echo "  ./notion --db ventures tasks"
-  echo "  ./notion --db 3da11e67af4180c4... tasks"
-  echo "  ./notion tasks 42"
-  echo "  ./notion tasks --filter stage \"In Progress\""
-  echo "  ./notion tasks --filter \"Assigned To\" waqas@example.com"
-  echo "  ./notion tasks --filter \"Created By\" ako@example.com"
-  echo "  ./notion tasks --sort \"No.\" desc"
-  echo "  ./notion comment 42 \"Blocked on design review\""
-  echo "  ./notion update 42 stage \"Done\""
-  echo "  ./notion update 42 priority \"High\""
-  echo "  ./notion update 42 \"due date\" 2026-09-15"
-  echo "  ./notion update 42 \"Assigned To\" \"waqas@example.com,syed@example.com\""
-  echo "  ./notion create --title \"Fix login bug\" --stage \"To Do\" --priority \"High\""
-  echo "  ./notion --db ventures create --title \"New venture\""
-  echo "  ./notion open 42"
-  echo "  ./notion dbs"
-  echo "  ./notion people"
-  echo "  ./notion assign 42 waqas@example.com,syed@example.com"
-  echo "  ./notion unassign 42 ako@example.com"
+  bold "EXAMPLES:"
+  echo "  notion task list"
+  echo "  notion task list --filter Status \"In Progress\""
+  echo "  notion task list --filter \"Assigned To\" user@example.com"
+  echo "  notion task list --sort \"No.\" desc"
+  echo "  notion task show 42"
+  echo "  notion task create --title \"Fix login bug\" --Status \"To Do\" --Priority \"High\""
+  echo "  notion task update 42 Status \"In Review\""
+  echo "  notion task update 42 \"Due Date\" 2026-09-15"
+  echo "  notion task assign 42 user@example.com,other@example.com"
+  echo "  notion task unassign 42 user@example.com"
+  echo "  notion comment add 42 \"Blocked on design review\""
+  echo "  notion user list"
+  echo "  notion db list"
+  echo "  notion --db ventures task list"
+  echo "  notion --db ventures task create --title \"New venture\""
+  echo "  notion workflow show development"
   echo ""
 }
 
@@ -1482,81 +1091,91 @@ cmd_help() {
 # ---------------------------------------------------------------------------
 require_deps
 
-COMMAND="${1:-help}"
+NOUN="${1:-help}"
 shift || true
 
-if [[ "$COMMAND" != "help" && "$COMMAND" != "--help" && "$COMMAND" != "-h" ]]; then
-  # bootstrap --help, rules, and dbs are allowed without .env.notion / a valid DB ID
-  if [[ "$COMMAND" == "bootstrap" && $# -gt 0 && ( "$1" == "--help" || "$1" == "-h" || "$1" == "help" ) ]]; then
-    true
-  elif [[ "$COMMAND" == "rules" || "$COMMAND" == "dbs" || "$COMMAND" == "workflow" || "$COMMAND" == "workflows" ]]; then
-    true
-  else
-    require_env
-  fi
-fi
+# Nouns that work without a valid DB configured
+_no_env_needed="rules workflow db help --help -h"
 
-case "$COMMAND" in
-  tasks)
-    if [[ $# -eq 0 ]]; then
-      cmd_tasks_list
-    elif [[ "$1" =~ ^[0-9]+$ ]]; then
-      cmd_task_detail "$1"
-    elif [[ "$1" == "--filter" || "$1" == "--sort" ]]; then
-      cmd_tasks_list "$@"
-    else
-      die "Unknown argument for 'tasks': $1"
-    fi
+case "$NOUN" in
+  task)
+    require_env
+    VERB="${1:-list}"; shift || true
+    case "$VERB" in
+      list)     cmd_task_list "$@" ;;
+      show)
+        [[ $# -lt 1 ]] && die "Usage: notion task show <No.>"
+        cmd_task_show "$1" ;;
+      create)   cmd_task_create "$@" ;;
+      update)
+        [[ $# -lt 3 ]] && die "Usage: notion task update <No.> <property> <value>"
+        cmd_task_update "$1" "$2" "$3" ;;
+      assign)
+        [[ $# -lt 2 ]] && die "Usage: notion task assign <No.> <email[,email,...]>"
+        cmd_task_assign "$1" "$2" ;;
+      unassign)
+        [[ $# -lt 2 ]] && die "Usage: notion task unassign <No.> <email[,email,...]>"
+        cmd_task_unassign "$1" "$2" ;;
+      *) die "Unknown verb '${VERB}' for 'task'. Try: list, show, create, update, assign, unassign" ;;
+    esac
     ;;
+
   comment)
-    if [[ $# -lt 2 ]]; then die "Usage: ./notion comment <No.> \"text\""; fi
-    cmd_add_comment "$1" "$2"
+    require_env
+    VERB="${1:-}"; shift || true
+    case "$VERB" in
+      add)
+        [[ $# -lt 2 ]] && die "Usage: notion comment add <No.> \"text\""
+        cmd_comment_add "$1" "$2" ;;
+      *) die "Unknown verb '${VERB}' for 'comment'. Try: add" ;;
+    esac
     ;;
-  update)
-    if [[ $# -lt 3 ]]; then die "Usage: ./notion update <No.> <property> <value>"; fi
-    cmd_update "$1" "$2" "$3"
+
+  user)
+    require_env
+    VERB="${1:-list}"; shift || true
+    case "$VERB" in
+      list) cmd_user_list ;;
+      *) die "Unknown verb '${VERB}' for 'user'. Try: list" ;;
+    esac
     ;;
-  create)
-    cmd_create "$@"
+
+  db)
+    VERB="${1:-list}"; shift || true
+    case "$VERB" in
+      list)      cmd_db_list ;;
+      bootstrap)
+        if [[ $# -gt 0 && ( "$1" == "--help" || "$1" == "-h" || "$1" == "help" ) ]]; then
+          cmd_db_bootstrap_help
+        else
+          require_env
+          cmd_db_bootstrap
+        fi
+        ;;
+      *) die "Unknown verb '${VERB}' for 'db'. Try: list, bootstrap" ;;
+    esac
     ;;
-  open)
-    if [[ $# -lt 1 ]]; then die "Usage: ./notion open <No.>"; fi
-    cmd_open "$1"
-    ;;
-  bootstrap)
-    if [[ $# -gt 0 && ( "$1" == "--help" || "$1" == "-h" || "$1" == "help" ) ]]; then
-      cmd_bootstrap_help
-    else
-      cmd_bootstrap
-    fi
-    ;;
+
   rules)
     cmd_rules
     ;;
+
   workflow)
-    cmd_workflow
+    VERB="${1:-list}"; shift || true
+    case "$VERB" in
+      list) cmd_workflow_list ;;
+      show)
+        [[ $# -lt 1 ]] && die "Usage: notion workflow show <name>"
+        cmd_workflow_show "$1" ;;
+      *) die "Unknown verb '${VERB}' for 'workflow'. Try: list, show" ;;
+    esac
     ;;
-  workflows)
-    cmd_workflows "${1:-}"
-    ;;
-  dbs)
-    cmd_dbs
-    ;;
-  people)
-    cmd_people
-    ;;
-  assign)
-    if [[ $# -lt 2 ]]; then die "Usage: notion assign <No.> <handle[,handle,...]>"; fi
-    cmd_assign "$1" "$2"
-    ;;
-  unassign)
-    if [[ $# -lt 2 ]]; then die "Usage: notion unassign <No.> <handle[,handle,...]>"; fi
-    cmd_unassign "$1" "$2"
-    ;;
+
   help|--help|-h)
     cmd_help
     ;;
+
   *)
-    die "Unknown command: '${COMMAND}'. Run './notion help' for usage."
+    die "Unknown noun: '${NOUN}'. Run 'notion help' for usage."
     ;;
 esac

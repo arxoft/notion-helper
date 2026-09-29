@@ -30,7 +30,7 @@ We need to fix the issue where the login page redirects users in a loop when the
 - If relevant project documents exist (specs, RFCs, design files, API docs), **link or reference them** in the description.
 - Use the CLI to set it:
   ```
-  ./notion update <No.> Notes "Full description here..."
+  notion task update <No.> Notes "Full description here..."
   ```
 
 ---
@@ -48,13 +48,13 @@ We need to fix the issue where the login page redirects users in a loop when the
 
 **Good (multiple short comments):**
 ```
-./notion comment 42 "Blocked: waiting on design approval for the modal layout."
-./notion comment 42 "Design approved. Moving to implementation."
+notion comment add 42 "Blocked: waiting on design approval for the modal layout."
+notion comment add 42 "Design approved. Moving to implementation."
 ```
 
 **Bad (one long dump):**
 ```
-./notion comment 42 "So I looked into the issue and it seems like the problem is related to the modal layout which design hasn't approved yet and also there's a question about whether we should use a drawer instead but I also noticed the API returns a 500 in some edge cases so we need to look at that too..."
+notion comment add 42 "So I looked into the issue and it seems like the problem is related to the modal layout which design hasn't approved yet and also there's a question about whether we should use a drawer instead but I also noticed the API returns a 500 in some edge cases so we need to look at that too..."
 ```
 
 ---
@@ -80,13 +80,13 @@ See also: Figma design #123 and the API contract in openapi.yaml.
 
 **Good:**
 ```
-./notion comment 42 "Implementation done and tested locally. Moving to Review."
-./notion update 42 Status "In Review"
+notion comment add 42 "Implementation done and tested locally. Moving to Review."
+notion task update 42 Status "In Review"
 ```
 
 **Bad:**
 ```
-./notion update 42 Status "In Review"
+notion task update 42 Status "In Review"
 ```
 *(No context left for the team about what changed or why.)*
 
@@ -111,7 +111,7 @@ Every task should have an **Effort** property set using Fibonacci points:
 
 **Example:**
 ```
-./notion update 42 Effort 5
+notion task update 42 Effort 5
 ```
 
 ---
@@ -133,8 +133,8 @@ These tags help the team prepare the environment before or during deployment and
 
 **Example:**
 ```
-./notion update 42 Tags "has-migration"
-./notion update 42 Tags "has-env-change"
+notion task update 42 Tags "has-migration"
+notion task update 42 Tags "has-env-change"
 ```
 
 ---

@@ -11,7 +11,7 @@ A release groups completed tasks into a named version, produces a changelog, and
 Query completed tasks since the last release:
 
 ```bash
-notion tasks --filter Status "Completed"
+notion task list --filter Status "Completed"
 ```
 
 Group them by type:
@@ -80,7 +80,7 @@ Only after explicit instruction from the user.
 Add a comment on each task included in the release:
 
 ```bash
-notion comment <No.> "Included in release v1.4.0."
+notion comment add <No.> "Included in release v1.4.0."
 ```
 
 ---

@@ -8,7 +8,7 @@
 
 - Human tells you Notion task number to start development
 - Ask human's email address, and assign the task to that user only.
-- Fetch task `notion tasks <id>`, and read notes/description and all comments for context.
+- Fetch task `notion task show <id>`, and read notes/description and all comments for context.
 - Ask questions in a comment before starting if anything is unclear. And move it back to 'Up Next' with tag 'need info'.
 
 ## 2. Set Up the Branch(es)
@@ -21,8 +21,8 @@
 
 ## 3. Move to In Progress
 - Add tag 'coding'.
-- Add a comment before changing status: `notion comment <No.> "Starting implementation. Branch: <branch-name>."`
-- Then: `notion update <No.> Status "In Progress"`
+- Add a comment before changing status: `notion comment add <No.> "Starting implementation. Branch: <branch-name>."`
+- Then: `notion task update <No.> Status "In Progress"`
 
 ## 4. Implement
 
@@ -64,5 +64,5 @@
 ## 8. Move to Pending Review
 
 - Add a comment with manual testing instructions (what to test, how to trigger, expected outcome).
-- Then: `notion update <No.> Status "Pending Review"`
+- Then: `notion task update <No.> Status "Pending Review"`
 - Remove the 'coding' tag
