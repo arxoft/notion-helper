@@ -2,11 +2,11 @@
 
 - There can be multiple repos in the workflow.
 - The 'developer' or 'dev' is human instructing you to complete a task.
-- If working dir in the repo(s) is not clean, ask developer if they really want to continue with dirty working dir?
 
 ## 1. Pick Up a Task
 
 - Human tells you Notion task number to start development
+- Verify all repos are on the root branch and have a clean working dir before proceeding. If not, ask the developer if they really want to continue.
 - Ask human's email address, and assign the task to that user only.
 - Fetch task `notion task show <id>`, and read notes/description and all comments for context.
 - Ask questions in a comment before starting if anything is unclear. And move it back to 'Up Next' with tag 'need info'.
@@ -32,8 +32,8 @@
 
 ## 5. Testing
 
-- After coding is done, ask developer to manually test the implementation
-- Provide Manual testing instructions to developer.
+- After coding is done, post a comment on the task with manual testing instructions (what to test, how to trigger, expected outcome).
+- Then ask developer to manually test the implementation.
 - Make further changes and fixes if developer reports issues.
 
 ## 6. Commits
@@ -52,7 +52,7 @@
   ```
 - Prefer new commits over `--amend`.
 - Never skip hooks (`--no-verify`) unless explicitly asked.
-- After human confirms the commit hash, post a comment on the task with that exact commit msg and Github commit link.
+- Get commit hash from top of git log, confirming it's the correct commit message, then post a comment on the task with that exact commit msg and Github commit link.
 
 ## 7. Push and Open a PR
 
@@ -66,3 +66,7 @@
 - Add a comment with manual testing instructions (what to test, how to trigger, expected outcome).
 - Then: `notion task update <No.> Status "Pending Review"`
 - Remove the 'coding' tag
+
+## 9. Switch Back to Root Branch
+
+- Switch back to the root branch in all repos: `git checkout <root-branch>`

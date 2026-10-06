@@ -15,6 +15,7 @@
 #   notion task unassign <No.> <email[,email,..]> Remove specific assignees
 #   notion db list                                List DB aliases
 #   notion db bootstrap                           Provision DB with standard schema
+#   notion db bootstrap --milestone <uuid>        Bootstrap with Milestone relation to another DB
 #   notion rules                                  Display workspace best practices
 #   notion workflow list                          List available workflows
 #   notion workflow show <name>                   Show a specific workflow
@@ -65,6 +66,8 @@ unset _line _key _val
 
 NOTION_API_KEY="${NOTION_API_KEY:-}"
 NOTION_DATABASE_ID="${NOTION_DATABASE_ID:-}"
+NOTION_USER="${NOTION_USER:-}"
+NOTION_USER_EMAIL="${NOTION_USER_EMAIL:-}"
 NOTION_STATUS_PROPERTY_NAME="Status"
 NOTION_TITLE_PROPERTY_NAME="${NOTION_TITLE_PROPERTY_NAME:-Task name}"
 NOTION_VERSION="2022-06-28"
@@ -268,6 +271,7 @@ build_prop_body() {
     email)        jq -n --arg v "$value" '{email:        $v}' ;;
     phone_number) jq -n --arg v "$value" '{phone_number: $v}' ;;
     date)         jq -n --arg v "$value" '{date:         {start:$v}}' ;;
+    relation)     jq -n --arg v "$value" '{relation:     [{id:$v}]}' ;;
     people)
       resolve_user_ids "$value"
       jq -n --argjson arr "$_RESOLVED_PEOPLE" '{people: $arr}' ;;
@@ -316,11 +320,14 @@ print_property() {
 # ---------------------------------------------------------------------------
 
 cmd_task_list() {
-  local filter_prop="" filter_val="" sort_prop="" sort_dir="ascending"
+  local filter_prop="" filter_val="" sort_prop="" sort_dir="ascending" mine=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --filter) filter_prop="$2"; filter_val="$3"; shift 3 ;;
+      --mine)
+        [[ -z "${NOTION_USER_EMAIL:-}" ]] && die "--mine requires NOTION_USER_EMAIL in .env.notion"
+        mine=1; shift ;;
       --sort)
         sort_prop="$2"; shift 2
         if [[ $# -gt 0 && "$1" =~ ^(asc|desc|ascending|descending)$ ]]; then
@@ -330,6 +337,12 @@ cmd_task_list() {
       *) die "Unknown option: $1" ;;
     esac
   done
+
+  # --mine sets an implicit people filter on the assignee column
+  if [[ "$mine" -eq 1 ]]; then
+    filter_prop="Assignee"
+    filter_val="$NOTION_USER_EMAIL"
+  fi
 
   [[ "$sort_dir" == "asc" ]]  && sort_dir="ascending"
   [[ "$sort_dir" == "desc" ]] && sort_dir="descending"
@@ -516,6 +529,10 @@ cmd_task_create() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --title) title="$2"; shift 2 ;;
+      --self)
+        [[ -z "${NOTION_USER_EMAIL:-}" ]] && die "--self requires NOTION_USER_EMAIL in .env.notion"
+        extra_props["assignee"]="$NOTION_USER_EMAIL"
+        shift ;;
       --*)
         local key="${1#--}"
         extra_props["$key"]="$2"
@@ -595,14 +612,34 @@ cmd_task_update() {
   prop_type=$(echo "$page" | jq -r --arg p "$real_prop" '.properties[$p].type')
   prop_body=$(build_prop_body "$prop_type" "$value")
 
+  # Auto-comment on status changes to maintain audit trail (per RULES.md)
+  if [[ "$prop_type" == "status" || "$prop_type" == "select" ]] && \
+     [[ "${real_prop,,}" == "status" ]]; then
+    local old_status audit_text
+    old_status=$(echo "$page" | jq -r --arg p "$real_prop" \
+      '.properties[$p] | if .type == "status" then .status.name elif .type == "select" then .select.name else "" end')
+    audit_text="Status → **${value}**"
+    [[ -n "$old_status" ]] && audit_text="Status: ~~${old_status}~~ → **${value}**"
+    cmd_comment_add "$no" "$audit_text" "$page_id"
+  fi
+
   body=$(jq -n --arg p "$real_prop" --argjson pb "$prop_body" '{properties: {($p): $pb}}')
   notion_patch "/pages/${page_id}" "$body" > /dev/null
   green "✓ Updated '${real_prop}' on task No. ${no} → ${value}"
 }
 
 cmd_task_assign() {
-  local no="$1" handles_input="$2"
-  [[ -z "$handles_input" ]] && die "Usage: notion task assign <No.> <email[,email,...]>"
+  local no="$1" handles_input="${2:-}"
+
+  # --self shorthand
+  if [[ "$handles_input" == "--self" || -z "$handles_input" ]]; then
+    if [[ "$handles_input" == "--self" ]]; then
+      [[ -z "${NOTION_USER_EMAIL:-}" ]] && die "--self requires NOTION_USER_EMAIL in .env.notion"
+      handles_input="$NOTION_USER_EMAIL"
+    else
+      die "Usage: notion task assign <No.> <email[,email,...]|--self>"
+    fi
+  fi
 
   info "Resolving emails..."
   resolve_user_ids "$handles_input"
@@ -681,12 +718,18 @@ cmd_task_unassign() {
 # ---------------------------------------------------------------------------
 
 cmd_comment_add() {
-  local no="$1" text="$2"
+  local no="$1" text="$2" page_id="${3:-}"
   [[ -z "$text" ]] && die "Comment text cannot be empty."
 
-  info "Fetching task No. ${no}..."
-  local page_id
-  page_id=$(resolve_page_id "$no")
+  # Prepend acting user's name if NOTION_USER is set in .env.notion
+  if [[ -n "${NOTION_USER:-}" ]]; then
+    text="(${NOTION_USER}) ${text}"
+  fi
+
+  if [[ -z "$page_id" ]]; then
+    info "Fetching task No. ${no}..."
+    page_id=$(resolve_page_id "$no")
+  fi
 
   local rich_text_json
   rich_text_json=$(python3 -c "
@@ -806,10 +849,21 @@ cmd_db_list() {
 }
 
 cmd_db_bootstrap() {
+  local milestone_db_id="${NOTION_DATABASE_ID}"  # default: self-relation
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --milestone)
+        [[ $# -lt 2 ]] && die "--milestone requires a UUID argument"
+        milestone_db_id="$2"; shift 2 ;;
+      *) die "Unknown option: $1" ;;
+    esac
+  done
+
   info "Bootstrapping database ${NOTION_DATABASE_ID}..."
 
   local props
-  props=$(jq -n '{
+  props=$(jq -n --arg mid "$milestone_db_id" '{
     "ID":           {"unique_id": {"prefix": null}},
     "Status": {
       "status": {
@@ -844,7 +898,8 @@ cmd_db_bootstrap() {
     "URL":          {"url": {}},
     "Effort":       {"number": {"format": "number"}},
     "Git Branch":   {"rich_text": {}},
-    "Pull Request": {"url": {}}
+    "Pull Request": {"url": {}},
+    "Milestone":    {"relation": {"database_id": $mid, "single_property": {}}}
   }')
 
   local body result
@@ -865,7 +920,10 @@ cmd_db_bootstrap_help() {
   bold "notion db bootstrap — Provision a Notion database with a standard task management schema"
   echo ""
   bold "USAGE:"
-  echo "  notion db bootstrap"
+  echo "  notion db bootstrap [--milestone <uuid>]"
+  echo ""
+  bold "OPTIONS:"
+  echo "  --milestone <uuid>   DB ID to use for the Milestone relation (default: same DB / self-relation)"
   echo ""
   bold "WHAT IT DOES:"
   echo "  Applies a fixed property template to the database set in NOTION_DATABASE_ID."
@@ -884,6 +942,7 @@ cmd_db_bootstrap_help() {
   printf "  %-14s %-12s %s\n" "Effort"       "number"     "Fibonacci effort points (1 2 3 5 8 13)"
   printf "  %-14s %-12s %s\n" "Git Branch"   "rich_text"  "Associated git branch name"
   printf "  %-14s %-12s %s\n" "Pull Request" "url"        "GitHub pull request URL"
+  printf "  %-14s %-12s %s\n" "Milestone"    "relation"   "Parent milestone task (self-relation by default)"
   echo ""
   bold "PRE-REQUISITES:"
   echo ""
@@ -1035,10 +1094,13 @@ cmd_help() {
   echo "  notion task list                              List tasks grouped by Status"
   echo "  notion task list --filter <prop> <value>      Filter by property"
   echo "  notion task list --sort <prop> [asc|desc]     Sort by property"
+  echo "  notion task list --mine                       Show only tasks assigned to you"
   echo "  notion task show <No.>                        Show task details and comments"
   echo "  notion task create --title \"...\" [--prop val] Create a new task"
+  echo "  notion task create --title \"...\" --self        Create and assign to yourself"
   echo "  notion task update <No.> <property> <value>   Update a task property"
   echo "  notion task assign <No.> <email[,email,...]>  Set assignees (replaces all)"
+  echo "  notion task assign <No.> --self               Assign yourself"
   echo "  notion task unassign <No.> <email[,email,..]> Remove specific assignees"
   echo ""
   bold "COMMENT:"
@@ -1050,6 +1112,7 @@ cmd_help() {
   bold "DB:"
   echo "  notion db list                                List DB aliases from .env.notion"
   echo "  notion db bootstrap                           Provision DB with standard schema"
+  echo "  notion db bootstrap --milestone <uuid>        Provision with Milestone relation to another DB"
   echo "  notion db bootstrap --help                    Show bootstrap details"
   echo ""
   bold "REFERENCE:"
@@ -1065,16 +1128,21 @@ cmd_help() {
   echo "  NOTION_DATABASE_ID:VENTURES=<uuid>                # alias: --db ventures"
   echo "  NOTION_DATABASE_ID:CLIENTS=<uuid>                 # alias: --db clients"
   echo "  NOTION_TITLE_PROPERTY_NAME=Title                  # title prop name (default: Task name)"
+  echo "  NOTION_USER=ako                                   # your handle — prefixes all comments"
+  echo "  NOTION_USER_EMAIL=ako@example.com                 # your email — used for --self and --mine"
   echo ""
   bold "EXAMPLES:"
   echo "  notion task list"
+  echo "  notion task list --mine"
   echo "  notion task list --filter Status \"In Progress\""
   echo "  notion task list --filter \"Assigned To\" user@example.com"
   echo "  notion task list --sort \"No.\" desc"
   echo "  notion task show 42"
+  echo "  notion task create --title \"Fix login bug\" --self"
   echo "  notion task create --title \"Fix login bug\" --Status \"To Do\" --Priority \"High\""
   echo "  notion task update 42 Status \"In Review\""
   echo "  notion task update 42 \"Due Date\" 2026-09-15"
+  echo "  notion task assign 42 --self"
   echo "  notion task assign 42 user@example.com,other@example.com"
   echo "  notion task unassign 42 user@example.com"
   echo "  notion comment add 42 \"Blocked on design review\""
@@ -1149,7 +1217,7 @@ case "$NOUN" in
           cmd_db_bootstrap_help
         else
           require_env
-          cmd_db_bootstrap
+          cmd_db_bootstrap "$@"
         fi
         ;;
       *) die "Unknown verb '${VERB}' for 'db'. Try: list, bootstrap" ;;
