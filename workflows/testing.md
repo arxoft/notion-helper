@@ -45,6 +45,8 @@ notion task update <No.> Status "Up Next"
 
 Be specific in the comment — include steps to reproduce the failure.
 
+**A screenshot must be attached to the comment** clearly showing the issue. Do not report an issue without one.
+
 ---
 
 ## 4. Outcome: All Good
@@ -55,6 +57,8 @@ If everything looks correct:
 notion comment add <No.> "Testing passed. Moving to Pending Acceptance."
 notion task update <No.> Status "Pending Acceptance"
 ```
+
+**A screenshot must be attached to the comment** clearly showing the passing result.
 
 ---
 

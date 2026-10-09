@@ -35,6 +35,7 @@
 - After coding is done, post a comment on the task with manual testing instructions (what to test, how to trigger, expected outcome).
 - Then ask developer to manually test the implementation.
 - Make further changes and fixes if developer reports issues.
+- **When the developer confirms a task is complete, a screenshot must be attached as a comment** clearly showing the working result. No task moves forward without it.
 
 ## 6. Commits
 

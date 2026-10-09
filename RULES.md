@@ -45,6 +45,17 @@ We need to fix the issue where the login page redirects users in a loop when the
   - `` `backticks` `` for file names, function names, branch names, commands
   - `~~strikethrough~~` for corrections or things that no longer apply
   - `[label](url)` for links with meaningful labels; bare URLs auto-link too
+- **Always include the full task URL** when referencing another task in a comment — never just the task number. Use the format `[Task title or #No.](https://notion.so/...)`.
+
+**Good:**
+```
+notion comment add 42 "Blocked by [Fix auth token refresh](https://notion.so/your-workspace/abc123)."
+```
+
+**Bad:**
+```
+notion comment add 42 "Blocked by task #38."
+```
 
 **Good (multiple short comments):**
 ```
@@ -146,7 +157,7 @@ notion task update 42 Tags "has-env-change"
 | Title length  | 9–12 words max                                                            |
 | Description   | Always fill in Notes/Description — include what, why, acceptance criteria |
 | Relevant docs | Reference any related specs, designs, or docs in the description          |
-| Comments      | Keep short; split long thoughts into multiple comments and use rich text formatting (`**bold**`, `` `code` ``, `[label](url)`) |
+| Comments      | Keep short; split long thoughts into multiple comments; use rich text formatting; always post full task URL when referencing another task |
 | Status change | Always comment before updating the Status property                        |
 | Tags          | Add `has-migration` or `has-env-change` when applicable                   |
 | Effort        | Set Fibonacci points (1–13); 13 = too big, consider splitting             |
